@@ -14,15 +14,7 @@ A Python-based reliability coefficient for quantitative studies. The app automat
 
 ## Data Structure
 
-Data accepted in this web app follow the following rules:
-
-| Header |
-|-|
-| Data |
-| Data |
-| Data |
-
-**NOTE**: The first line of your data expects **header**, it will not be counted as data.
+The first line of your data expects **header**, it will not be counted as data.
 
 The following is the example of comma-delimiter CSV.
 
@@ -71,41 +63,41 @@ The example above should look like the following on the web app.
 
 ## Example of Data: Format 2
 
-Your data can also appear in the following format:
+Your data can also appear in the following format. If you use the following format, never assign "No." into the app.
 
 | No. | R1 | R2 | R3 | R4 | R5 | R6 |
 |-|-|-|-|-|-|-|
-| 1. | 63 | 70 | 66 | 66 | 66 | 62 |
-| 2.| 62 | 69 | 71 | 62 | 64 | 70 |
-| 3.| 63 | 74 | 70 | 75 | 60 | 74 |
-| 4.| 58 | 76 | 80 | 75 | 72 | 76 |
-| 5.| 59 | 65 | 63 | 60 | 66 | 76 |
-| 6.| 62 | 80 | 76 | 76 | 76 | 90 |
-| 7.| 76 | 69 | 71 | 74 | 72 | 86 |
-| 8.| 67 | 81 | 77 | 65 | 64 | 86 |
-| 9.| 72 | 62 | 66 | 71 | 72 | 72 |
-| 10.| 60 | 58 | 62 | 76 | 62 | 62 |
-| 11.| 59 | 71 | 75 | 74 | 74 | 74 |
-| 12.| 64 | 79 | 75 | 76 | 76 | 76 |
-| 13.| 66 | 64 | 60 | 72 | 72 | 72 |
-| 14.| 60 | 80 | 76 | 70 | 70 | 70 |
-| 15.| 68 | 70 | 74 | 65 | 65 | 65 |
-| 16.| 85 | 69 | 65 | 74 | 74 | 74 |
+| 1 | 63 | 70 | 66 | 66 | 66 | 62 |
+| 2 | 62 | 69 | 71 | 62 | 64 | 70 |
+| 3 | 63 | 74 | 70 | 75 | 60 | 74 |
+| 4 | 58 | 76 | 80 | 75 | 72 | 76 |
+| 5 | 59 | 65 | 63 | 60 | 66 | 76 |
+| 6 | 62 | 80 | 76 | 76 | 76 | 90 |
+| 7 | 76 | 69 | 71 | 74 | 72 | 86 |
+| 8 | 67 | 81 | 77 | 65 | 64 | 86 |
+| 9 | 72 | 62 | 66 | 71 | 72 | 72 |
+| 10 | 60 | 58 | 62 | 76 | 62 | 62 |
+| 11 | 59 | 71 | 75 | 74 | 74 | 74 |
+| 12 | 64 | 79 | 75 | 76 | 76 | 76 |
+| 13 | 66 | 64 | 60 | 72 | 72 | 72 |
+| 14 | 60 | 80 | 76 | 70 | 70 | 70 |
+| 15 | 68 | 70 | 74 | 65 | 65 | 65 |
+| 16 | 85 | 69 | 65 | 74 | 74 | 74 |
 
 ## Example of Data: Format 3
 
-Your data can also appear in the following format:
+Your data can also appear in the following format. If you use the following format, never assign "No." and "Name" into the app.
 
 | No. | Name | R1 | R2 | R3 | R4 | R5 | R6 |
 |-|-|-|-|-|-|-|-|
 | 1. | Aria | 63 | 70 | 66 | 66 | 66 | 62 |
-| 2.| Kai | 62 | 69 | 71 | 62 | 64 | 70 |
-| 3.| Luna | 63 | 74 | 70 | 75 | 60 | 74 |
-| 4.| John | 58 | 76 | 80 | 75 | 72 | 76 |
-| 5.| Eden | 59 | 65 | 63 | 60 | 66 | 76 |
-| 6.| Emma | 62 | 80 | 76 | 76 | 76 | 90 |
-| 7.| Noah | 76 | 69 | 71 | 74 | 72 | 86 |
-| 8.| Sam | 67 | 81 | 77 | 65 | 64 | 86 |
+| 2. | Kai | 62 | 69 | 71 | 62 | 64 | 70 |
+| 3. | Luna | 63 | 74 | 70 | 75 | 60 | 74 |
+| 4. | John | 58 | 76 | 80 | 75 | 72 | 76 |
+| 5. | Eden | 59 | 65 | 63 | 60 | 66 | 76 |
+| 6. | Emma | 62 | 80 | 76 | 76 | 76 | 90 |
+| 7. | Noah | 76 | 69 | 71 | 74 | 72 | 86 |
+| 8. | Sam | 67 | 81 | 77 | 65 | 64 | 86 |
 
 ## About Us
 
