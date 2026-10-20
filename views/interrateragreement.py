@@ -530,8 +530,8 @@ st.markdown("""
 
 st.markdown("""
 <div style="margin-bottom:1rem;">
-  <p style="color:#64748b;font-size:.9rem;margin-bottom:.4rem;">
-    &#9749; Support this work &mdash; scan QRIS:</p>
+  <p style="color:#8f3c04;font-size:1rem;margin-bottom:.5rem;">
+    &#9749; This work is fully supported by BIMA Kemdiktisaintek. Support this work &mdash; scan:</p>
   <img src="https://muhaiminabdullah.com/media/images/qris_muhaiminabdullahdotcom.png"
        style="width:180px;border-radius:10px;border:2px solid #e94560;display:block;"/>
 </div>""", unsafe_allow_html=True)
