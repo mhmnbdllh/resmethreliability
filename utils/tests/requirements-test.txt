@@ -1,0 +1,7 @@
+# Test-only dependency for tests/test_irar_formulas.py.
+# Not required by the deployed Streamlit app itself (see requirements.txt) --
+# only used to independently cross-check Krippendorff's alpha against a
+# third-party implementation.
+#
+# Install with: pip install -r tests/requirements-test.txt
+krippendorff>=0.6.1
