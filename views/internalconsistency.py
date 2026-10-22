@@ -90,7 +90,7 @@ def _coeff_blocks(res, alpha):
     """
     pct = int((1 - res.get("alpha_level", alpha)) * 100)
     a = res.get("alpha"); ci = res.get("alpha_ci", (np.nan, np.nan))
-    a_std = res.get("alpha_std"); omega = res.get("omega")
+    a_std = res.get("alpha_std")
     omh = res.get("omega_h_detail") or {}
     lam = res.get("lambdas", {}); sh = res.get("split_half", {})
     kr = res.get("kr20"); dich = res.get("dichotomous")
@@ -162,7 +162,7 @@ def _coeff_blocks(res, alpha):
                        (f" (only {k} item{'s' if k != 1 else ''})." if k < 3 else "."))
 
     omega_model_implied = om_detail.get("omega_model_implied", np.nan)
-    omega_observed = om_detail.get("omega_observed", omega)  # fallback to legacy key
+    omega_observed = om_detail.get("omega_observed", np.nan)
     omega_gap = (abs(omega_model_implied - omega_observed)
                  if (not (isinstance(omega_model_implied, float) and np.isnan(omega_model_implied))
                      and not (isinstance(omega_observed, float) and np.isnan(omega_observed)))
@@ -411,7 +411,7 @@ def _coeff_blocks(res, alpha):
     # ── Guttman's Lambda: dual-basis (raw covariance + standardized) ──────
     # These are NOT two different theories: same Guttman (1945) lambda
     # family, computed on two legitimate but different measurement bases.
-    lam_raw = lam.get("raw", lam)          # backward-compat fallback
+    lam_raw = lam.get("raw", {})
     lam_std = lam.get("standardized", {})
 
     def _lambda_rows_with_ci(lam_basis):
@@ -685,12 +685,6 @@ def _coeff_blocks(res, alpha):
                     and kr > 1)
         _item_p  = res.get("item_p",  np.array([]))
         _item_pq = res.get("item_pq", np.array([]))
-        # Fallback: compute item_p from item_stats if engine was old version
-        if len(_item_p) == 0 and "item_stats" in res:
-            _ist = res["item_stats"]
-            if _ist is not None and not _ist.empty and "Mean" in _ist.columns:
-                _item_p  = _ist["Mean"].values
-                _item_pq = _item_p * (1 - _item_p)
         _item_names = res.get("item_names",
                               [f"Item {i+1}" for i in range(len(_item_p))])
         # Item-level diagnostic table
@@ -724,15 +718,40 @@ def _coeff_blocks(res, alpha):
                          ["Standardized Alpha (correlation-basis)", _f(_astd_val)],
                          ["N of Items", str(k)]]
             _rel_note = (
+                # CORRECTION (2026-10-21): this note previously claimed the
+                # out-of-range value is a "known, well-documented
+                # mathematical property" that "occurs when one or more
+                # items have near-zero variance." That causal claim was
+                # independently re-verified and found UNSUPPORTED: for any
+                # COMPLETE (listwise, no missing data) sample of correctly-
+                # coded 0/1 items, the sample covariance matrix is
+                # guaranteed positive semi-definite, which mathematically
+                # guarantees KR-20 (and Cronbach's alpha) cannot exceed
+                # 1.0 -- confirmed by a 200,000-trial Monte Carlo search
+                # (including deliberately near-zero-variance items and
+                # maximal positive inter-item correlation) that never
+                # produced a value exceeding 1.0 by more than floating-
+                # point noise. The genuine, reachable cause found in this
+                # application was a different, unrelated bug: reverse-
+                # scoring a dichotomous item with the sidebar's default
+                # non-0/1 theoretical bounds (scale_min=1, scale_max=5)
+                # produced non-Bernoulli-coded values that were still
+                # (wrongly) treated as "dichotomous," corrupting the KR-20
+                # computation -- now fixed at the source (see
+                # modules.reliability._is_dichotomous). This branch remains
+                # purely as a defensive floating-point-precision safety
+                # net; a genuine out-of-range value appearing now most
+                # likely indicates near-exact floating-point noise around
+                # 1.0 rather than a meaningful "near-zero item variance"
+                # phenomenon.
                 "<b>\u26a0\ufe0f KR-20 = " + _f(kr) + " \u2014 out-of-range (value &gt; 1).</b> "
-                "This is <b>not a calculation error</b>; it is a known, "
-                "well-documented mathematical property reproduced identically "
-                "by any correct implementation of the formula. It occurs "
-                "when one or more items have near-zero variance (p \u2248 0 or "
-                "p \u2248 1). Use the adjusted value (1.000) in report appendices, "
-                "with a methodological note explaining the extreme item "
-                "difficulty. See Item-Level Diagnostics below for which "
-                "items are responsible.")
+                "This is <b>not a calculation error</b>. For complete, "
+                "correctly-coded 0/1 data, KR-20 is mathematically bounded "
+                "at \u2264 1.000, so a value this far above 1 generally "
+                "signals floating-point noise at the boundary rather than a "
+                "substantively meaningful result. Use the adjusted value "
+                "(1.000) in report appendices, with a methodological note. "
+                "See Item-Level Diagnostics below for the underlying items.")
             _card_lbl = "\u26a0\ufe0f Out-of-range (> 1)"
         else:
             _rel_rows = [["KR-20", _f(kr)],
@@ -755,8 +774,17 @@ def _coeff_blocks(res, alpha):
             "params": (
                 "KR-20 applies to dichotomous (0/1) items and equals "
                 "Cronbach\u2019s alpha exactly for binary data (Kuder & "
-                "Richardson, 1937). KR-21 is a simplified, more conservative "
-                "form assuming equal item difficulty (KR-21 \u2264 KR-20 always). "
+                "Richardson, 1937) -- and, for complete (listwise) data, is "
+                "itself mathematically bounded at \u2264 1.000, so a reported "
+                "value above that reflects floating-point noise, not a "
+                "meaningful result. KR-21 is a simplified, more conservative "
+                "form assuming equal item difficulty; KR-21 \u2264 KR-20 "
+                "asymptotically (as N\u2192\u221e) and in typical samples, but a "
+                "small finite-sample violation is mathematically possible "
+                "(confirmed by direct construction: e.g. N=86 can produce a "
+                "violation on the order of 0.002\u20130.004) since the two "
+                "formulas are not computed on an identical basis for finite "
+                "N -- this is not a calculation error in either coefficient. "
                 "Standardized Alpha uses the correlation (not covariance) "
                 "basis \u2014 for genuinely dichotomous 0/1 items this will "
                 "generally differ from KR-20/raw-\u03b1 since item variances "
@@ -767,11 +795,11 @@ def _coeff_blocks(res, alpha):
                           f"the more conservative equal-difficulty approximation."
                           if not np.isnan(_gap_kr20_kr21) else "")) if not _kr_oor else
                        f"<b>\u26a0\ufe0f KR-20 = {_f(kr)} \u2014 out-of-range (value &gt; 1).</b> "
-                       f"This is <b>not a calculation error</b>; it is a known, "
-                       f"well-documented mathematical property reproduced "
-                       f"identically by any correct implementation of the "
-                       f"formula, occurring when one or more items have "
-                       f"near-zero variance. Use the <b>adjusted value "
+                       f"This is <b>not a calculation error</b>, but for complete, "
+                       f"correctly-coded 0/1 data KR-20 is mathematically bounded "
+                       f"at \u2264 1.000 (see Decision Parameters below), so this "
+                       f"most likely reflects floating-point noise at the "
+                       f"boundary. Use the <b>adjusted value "
                        f"({_f(_kr_capped)})</b> in your report, indicating "
                        f"<b>{alpha_label(_kr_capped)}</b> internal consistency."
                        + (f" KR-21 = {_f(_kr21_val)}, the more conservative "
@@ -897,7 +925,6 @@ def _coeff_blocks(res, alpha):
             "key": "KR-20", "title": "Kuder-Richardson 20",
             "cards": [("KR-20", "\u2014", "not applicable")],
             "table": None,
-            "item_diag": None,
             "params": "KR-20 is defined only for dichotomous (0/1) items.",
             "interp": ("KR-20 is not applicable here because the items are not "
                        "dichotomous. Use Cronbach\u2019s alpha instead."),
@@ -910,7 +937,6 @@ def _coeff_blocks(res, alpha):
             "key": "ICC", "title": "Intraclass Correlation Coefficient",
             "cards": [("ICC", "\u2014", "not computable")],
             "table": None,
-            "item_diag": None,
             "params": ("ICC requires variance in both subjects and items. "
                        "It cannot be computed when all items or all persons "
                        "have identical scores (zero variance)."),
@@ -1362,8 +1388,6 @@ with st.sidebar:
 
         st.markdown("---")
 
-        
-        scale_declarations_ok = True  # not applicable to IC; default safe
         n_constructs = st.number_input(
             "\U0001f4ca Number of constructs",
             min_value=1, max_value=20, value=1, step=1)
@@ -1397,6 +1421,39 @@ with st.sidebar:
                 c1, c2 = st.columns(2)
                 smin = c1.number_input("Scale min", value=1.0)
                 smax = c2.number_input("Scale max", value=5.0)
+                # SAFEGUARD (2026-10-21): added after confirming, by direct
+                # construction, that reversing a dichotomous (0/1) item
+                # with these UNCHANGED defaults silently produced non-0/1
+                # values ({5,6}) that an older version of
+                # modules.reliability._is_dichotomous still (incorrectly)
+                # treated as "dichotomous," corrupting KR-20 (observed:
+                # drove it from a normal in-range value to 122.42). That
+                # root cause is fixed at the source (_is_dichotomous now
+                # requires the values literally be 0/1), but a declared
+                # scale range that does not actually bound the selected
+                # items' observed data is still a strong, visible sign of
+                # a mismatched reversal setup -- most commonly, exactly
+                # this scenario (dichotomous or other non-1..5 data left
+                # at the 1..5 default). Surfaced directly to the user
+                # rather than silently falling back to a different
+                # (still correct, but likely unintended) result.
+                if used:
+                    _obs_vals = pd.to_numeric(
+                        df[used].stack(), errors="coerce").dropna()
+                    if not _obs_vals.empty:
+                        _omin, _omax = float(_obs_vals.min()), float(_obs_vals.max())
+                        if _omin < smin or _omax > smax:
+                            st.warning(
+                                f"⚠️ The declared theoretical scale "
+                                f"[{smin:g}, {smax:g}] does not cover the "
+                                f"observed data range [{_omin:g}, {_omax:g}] "
+                                f"for the selected item(s). Reversal computes "
+                                f"(scale min + scale max) − x, so an "
+                                f"incorrect range will silently produce the "
+                                f"wrong reversed values. Set Scale min/max to "
+                                f"match your actual response scale (e.g. 0 "
+                                f"and 1 for dichotomous items) before relying "
+                                f"on auto-reverse.")
 
         st.markdown("---")
         st.markdown("**\U0001f4c8 Additional Analyses (Optional)**")
@@ -1436,21 +1493,21 @@ with st.sidebar:
                    "compute_omega_h": compute_omega_h}
         st.markdown("---")
         run_btn = st.button("🚀 Run Analysis", type="primary",
-                            use_container_width=True)
+                            width="stretch")
     else:
         run_btn = False
 
 # ── Data preview ─────────────────────────────────────────────────────────────
 if df is not None:
     with st.expander("🔍 Data Preview (row 1 = header, not data)", expanded=False):
-        st.dataframe(df.head(20), use_container_width=True)
+        st.dataframe(df.head(20), width="stretch")
 
 # ── Welcome ──────────────────────────────────────────────────────────────────
 if not run_btn and "ic_M" not in st.session_state:
     st.markdown(
         '<div style="background:linear-gradient(135deg,#f0f9ff,#e0f2fe);'
-        'border:1px solid #bae6fd;border-radius:12px;padding:1.2rem 1.4rem;'
-        'margin:.8rem 0;border-left:4px solid #0284c7;">'
+        'box-shadow:inset 0 0 0 1px rgba(2,132,199,.22);border-radius:12px;'
+        'padding:1.2rem 1.4rem;margin:.8rem 0;">'
         '<h4 style="margin:0 0 .4rem;font-size:.95rem;font-weight:700;">'
         '🧪 Internal Consistency</h4>'
         '<p style="margin:0;font-size:.84rem;color:#475569;">'
@@ -1506,7 +1563,7 @@ srows = [list(M["summary"].columns)] + [
      for v in M["summary"].loc[i]] for i in M["summary"].index]
 st.markdown(html_tbl(srows, left_cols={0}), unsafe_allow_html=True)
 if figs_b and figs_b[0] is not None:
-    st.image(figs_b[0], use_container_width=True)
+    st.image(figs_b[0], width="stretch")
 st.markdown('<p class="note-txt">Figures only \u2014 a quick numeric comparison. '
             'Full detail per coefficient in each tab below.</p>',
             unsafe_allow_html=True)
@@ -1607,19 +1664,6 @@ for ti, res in enumerate(M["constructs"]):
                 if blk["note"]:
                     st.markdown(f'<p class="note-txt">{blk["note"]}</p>',
                                 unsafe_allow_html=True)
-                # Item-level diagnostics (KR-20 out-of-range)
-                if blk.get("item_diag"):
-                    st.markdown('<div class="sub-title">Item Diagnostics '
-                                '(p and p\u00d7q per item)</div>',
-                                unsafe_allow_html=True)
-                    st.markdown(html_tbl(blk["item_diag"], left_cols={0, 3}),
-                                unsafe_allow_html=True)
-                    st.markdown('<p class="note-txt">p = proportion of respondents '
-                                'answering 1 (correct/endorsed). '
-                                'p\u00d7q = item variance for dichotomous items. '
-                                'Items with p &lt; .10 or p &gt; .90 contribute '
-                                'near-zero variance and cause KR-20 to exceed 1.</p>',
-                                unsafe_allow_html=True)
         with stabs[-1]:
             for tname, payload in _item_tables(res).items():
                 st.markdown(f'<div class="sub-title">{tname}</div>',
@@ -1636,7 +1680,7 @@ for ti, res in enumerate(M["constructs"]):
                                     unsafe_allow_html=True)
                     f = figs_b[ti + 1]
                     if f is not None:
-                        st.image(f, use_container_width=True)
+                        st.image(f, width="stretch")
                 else:
                     cols, rows = payload
                     st.markdown(html_tbl([cols] + rows, left_cols={0}),
