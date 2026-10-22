@@ -16,11 +16,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
+_APP_ROOT = Path(__file__).resolve().parent.parent
+_SAMPLE_FILES = {
+    "Dichotomous (0/1, N=86, 4 raters)":        "sample-resmeth_Dichotomous.csv",
+    "Nominal / Ordinal (N=86, 4 raters)":       "sample-resmeth_Nominal-Ordinal.csv",
+    "Interval / Ratio (N=86, 4 raters)":        "sample-resmeth_Interval-Ratio.csv",
+}
+
 st.set_page_config(
-    page_title="Inter-Rater Agreement | Reliability Toolkit",
+    page_title="ResMeth-IRA | Inter-Rater Agreement",
     page_icon="🧪",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -28,7 +36,8 @@ st.set_page_config(
 
 from utils.styles      import load_page_css
 from utils.file_loader import (load_file, validate_file,
-                                file_metadata, get_numeric_cols)
+                                file_metadata, get_numeric_cols,
+                                load_sample_file)
 from utils.formatters  import _f as _f_base, _p as _p_base
 from utils.tables      import html_tbl
 from utils.plots       import fig_to_bytes
@@ -115,7 +124,11 @@ def _methodological_notes(M, alpha):
             "marginal proportion of category c across all raters. "
             "More stable than Cohen's κ under extreme marginal distributions "
             "(avoids the prevalence paradox). Variance estimated via jackknife. "
-            "Benchmarks: same as Cohen's κ (Landis & Koch, 1977). "
+            "Benchmarks: Landis & Koch (1977), used here only as a conventional "
+            "descriptive scale — Vach & Gerke (2023, MethodsX, 10, 102212) argue "
+            "AC1 and κ respond differently to prevalence and that AC1 can be "
+            "nonzero even with no real rater association, so a κ-calibrated "
+            "verbal scale does not necessarily carry the same meaning for AC1. "
             "References: Gwet (2008). British Journal of Mathematical and Statistical "
             "Psychology, 61(1), 29–48. Gwet (2014). Handbook of Inter-Rater Reliability (4th ed.)."
         ))
@@ -128,7 +141,12 @@ def _methodological_notes(M, alpha):
             "marginal proportions rather than their product. "
             "Differs from Cohen's κ only in P_e computation; typically yields "
             "slightly lower estimates when rater marginals differ. "
-            "SE: asymptotic approximation (Fleiss et al., 1969). "
+            "SE: Cohen's (1960) large-sample approximation, adapted to this "
+            "coefficient's own P_e — not Fleiss, Cohen & Everitt (1969), whose "
+            "more complex formula is used for Cohen's κ's own SE above; see "
+            "the AC2/Scott's π result card's confidence-interval note for the "
+            "corrected citation and a documented, independently-verified "
+            "limitation (a moderate, non-vanishing SE overestimate). "
             "Reference: Scott (1955). Public Opinion Quarterly, 19(3), 321–325."
         ))
 
@@ -185,7 +203,7 @@ def _methodological_notes(M, alpha):
             "when Identity (unweighted) weights are used. "
             "More stable than Weighted Cohen's κ under unequal marginals. "
             "Variance estimated via jackknife. "
-            "Reference: Gwet (2014). Handbook of Inter-Rater Reliability (4th ed.), Chapter 5."
+            "Reference: Gwet (2014). Handbook of Inter-Rater Reliability (4th ed.), Chapter 4."
         ))
 
     if "icc" in all_methods:
@@ -220,6 +238,12 @@ def _methodological_notes(M, alpha):
         ))
 
     if "krippendorff" in all_methods:
+        _actual_n_boot = next(
+            (c.get("krippendorff", {}).get("n_boot")
+             for c in constructs if (c.get("krippendorff") or {}).get("n_boot")),
+            None)
+        _boot_txt = (f"{_actual_n_boot:,} resamples" if _actual_n_boot
+                     else "the number of resamples selected in the sidebar")
         notes.append((
             "Krippendorff's Alpha (α)",
             "α = 1 − D_o/D_e. D_o = observed disagreement (mean pairwise distance "
@@ -228,7 +252,7 @@ def _methodological_notes(M, alpha):
             "nominal d(a,b)=0/1; ordinal d(a,b)=(Σn_g from a to b − (n_a+n_b)/2)²; "
             "interval d(a,b)=(a−b)²; ratio d(a,b)=((a−b)/(a+b))². "
             "Handles missing data and any number of raters. "
-            f"{pct}% CI: percentile bootstrap (1,000 resamples, seed=42). "
+            f"{pct}% CI: percentile bootstrap ({_boot_txt}, seed=42). "
             "Thresholds (Krippendorff, 2004): α ≥ .800 reliable; "
             ".667 ≤ α < .800 tentatively acceptable; α < .667 unreliable. "
             "Reference: Krippendorff (2004). Content Analysis (2nd ed.)."
@@ -504,10 +528,11 @@ def _irar_fleiss_bar(kappa_val, per_cat, title="Fleiss' κ — Per-Category Agre
     return fig
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# HTML EXPORT
-# ══════════════════════════════════════════════════════════════════════════════
-
+# NOTE (2026-10-21): an empty "HTML EXPORT" section header used to sit here
+# with no code under it (confirmed by reading through to the next section
+# header with nothing in between) -- removed as a leftover stub from a
+# feature that was never implemented on this page, rather than leaving a
+# misleading placeholder in place.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -518,6 +543,7 @@ st.markdown(load_page_css(), unsafe_allow_html=True)
 st.markdown("""
 <div class="main-hdr">
   <h1>&#129514; Inter-Rater Agreement
+    <span class="badge">ResMeth-IRA</span>
     <span class="badge">Publication-Grade</span>
     <span class="badge">Multi-Group</span>
     <span class="badge">Extended Diagnostics</span>
@@ -530,8 +556,8 @@ st.markdown("""
 
 st.markdown("""
 <div style="margin-bottom:1rem;">
-  <p style="color:#8f3c04;font-size:1rem;margin-bottom:.5rem;">
-    &#9749; This work is fully supported by BIMA Kemdiktisaintek. Support this work &mdash; scan:</p>
+  <p style="color:#64748b;font-size:.9rem;margin-bottom:.4rem;">
+    &#9749; Support this work &mdash; scan QRIS:</p>
   <img src="https://muhaiminabdullah.com/media/images/qris_muhaiminabdullahdotcom.png"
        style="width:180px;border-radius:10px;border:2px solid #e94560;display:block;"/>
 </div>""", unsafe_allow_html=True)
@@ -552,9 +578,43 @@ with st.sidebar:
     st.markdown("---")
     alpha = st.selectbox("\u03b1 (for confidence intervals)",
                          [0.05, 0.01, 0.10], index=0)
-    
-    analysis_mode = "Inter-Rater Agreement"
     st.markdown("---")
+
+    _SAMPLE_NONE = "— None (I'll upload my own file) —"
+    with st.expander("📂 Try with sample data"):
+        st.caption(
+            # WORDING (2026-10-21): changed "real" -> "illustrative" to
+            # match the manuscript's own Ethics statement, which already
+            # describes these sample files as "synthetic or de-identified
+            # illustrative rating data" -- the two had been contradicting
+            # each other (this page calling them "real," the manuscript
+            # calling them synthetic/de-identified). Actual data
+            # provenance is a fact only the user/dataset owner can
+            # confirm, so this is the conservative choice (consistent
+            # with the Ethics text already committed to in the delivered
+            # manuscript) rather than a guess -- flagged for the user's
+            # confirmation rather than silently resolved either way.
+            "Three illustrative rating datasets (N=86 units, up to 4 raters each) — "
+            "one per data type family. Pick one below to load it straight into "
+            "the analysis, or download it first to inspect or edit."
+        )
+        _samp_choice = st.selectbox(
+            "Load a sample dataset directly",
+            [_SAMPLE_NONE] + list(_SAMPLE_FILES.keys()),
+            index=0,
+            key="ira_samp_choice",
+        )
+        for _label, _fname in _SAMPLE_FILES.items():
+            _fpath = _APP_ROOT / _fname
+            if _fpath.exists():
+                st.download_button(
+                    f"⬇ {_label}",
+                    data=_fpath.read_bytes(),
+                    file_name=_fname,
+                    mime="text/csv",
+                    key=f"dl_{_fname}",
+                    width="stretch",
+                )
 
     uploaded = st.file_uploader("&#128194; Upload Data File",
                                 type=["csv", "xlsx", "xls"])
@@ -571,7 +631,18 @@ with st.sidebar:
                 for wm in val["warnings"]: st.warning(wm)
         except Exception as e:
             st.error(str(e)); df = None
-    
+    elif st.session_state.get("ira_samp_choice", _SAMPLE_NONE) != _SAMPLE_NONE:
+        # Direct sample-data loading (restores a capability present in the
+        # original reliability.py / 6_reliability.py views, which let a user
+        # pick a built-in sample and have it load automatically -- the
+        # dedicated ResMeth-IRA view had only offered download-then-reupload).
+        _samp_fname = _SAMPLE_FILES[st.session_state["ira_samp_choice"]]
+        _samp_fpath = _APP_ROOT / _samp_fname
+        try:
+            df = load_sample_file(_samp_fpath)
+            st.info(f"ℹ️ Using built-in sample data — {st.session_state['ira_samp_choice']}")
+        except Exception as e:
+            st.error(str(e)); df = None
     else:
         df = None
 
@@ -621,7 +692,7 @@ with st.sidebar:
         # has actually supplied it -- gates the Run button below.
         for i in range(int(n_groups)):
             st.markdown(f"**Rating Group {i+1}**")
-            # Fix [11]: separate widget keys for IRAR vs IC (irar_ prefix)
+            # Separate widget keys for IRAR vs IC (irar_ prefix)
             cname = st.text_input(
                 "Group name", value=f"Rating Group {i+1}",
                 key=f"irar_name_{i}")
@@ -675,7 +746,7 @@ with st.sidebar:
                 # whenever a q-dependent coefficient is applicable for
                 # this group: Gwet's AC1, Gwet's AC2, or Brennan-
                 # Prediger. Per the primary-theory audit (Gwet,
-                # Handbook of Inter-Rater Reliability, Ch. 5; Brennan
+                # Handbook of Inter-Rater Reliability, 4th ed., Ch. 4; Brennan
                 # & Prediger, 1981), q must reflect the instrument's
                 # declared category count -- a fact the application
                 # cannot infer or guess from the data alone, since a
@@ -740,7 +811,7 @@ with st.sidebar:
                 used_globally.extend(citems)
             st.markdown("")
 
-        # Fix [7]: Bootstrap option — shown only when Krippendorff will run
+        # Bootstrap option — shown only when Krippendorff will run
         n_boot_irar = 200
         if kripp_will_run:
             st.markdown("---")
@@ -772,9 +843,15 @@ with st.sidebar:
                     "This may take considerably longer. "
                     "Consider 200–400 resamples for faster results.")
 
-        auto_rev = False; rev_method = "theoretical"; smin = smax = None
-
-
+        # DEAD CODE REMOVED (2026-10-21): `auto_rev`, `rev_method`, `smin`,
+        # `smax` were assigned here but never read anywhere else in this
+        # file (confirmed by a full line-by-line read of the whole file,
+        # not just a grep for these names). They are reverse-scoring
+        # concepts specific to the Internal Consistency module (automatic
+        # vs. theoretical reverse-item detection, scale min/max) that had
+        # no business being declared on this Inter-Rater Agreement page at
+        # all -- almost certainly left over from copying the sidebar
+        # structure across the two modules.
 
         valid = [c for c in constructs if len(c.get("items", [])) >= 2]
         if len(valid) < len(constructs):
@@ -786,7 +863,7 @@ with st.sidebar:
             st.info("🔒 Complete every required instrument-scale field "
                      "above (marked with ⚠️) to enable analysis.")
         run_btn = st.button("🚀 Run Analysis", type="primary",
-                            use_container_width=True,
+                            width="stretch",
                             disabled=not scale_declarations_ok)
     else:
         run_btn = False
@@ -794,14 +871,14 @@ with st.sidebar:
 # ── Data preview ─────────────────────────────────────────────────────────────
 if df is not None:
     with st.expander("🔍 Data Preview (row 1 = header, not data)", expanded=False):
-        st.dataframe(df.head(20), use_container_width=True)
+        st.dataframe(df.head(20), width="stretch")
 
 # ── Welcome ──────────────────────────────────────────────────────────────────
 if not run_btn and "ira_M" not in st.session_state:
     st.markdown(
         '<div style="background:linear-gradient(135deg,#f0f9ff,#e0f2fe);'
-        'border:1px solid #bae6fd;border-radius:12px;padding:1.2rem 1.4rem;'
-        'margin:.8rem 0;border-left:4px solid #0284c7;">'
+        'box-shadow:inset 0 0 0 1px rgba(2,132,199,.22);border-radius:12px;'
+        'padding:1.2rem 1.4rem;margin:.8rem 0;">'
         '<h4 style="margin:0 0 .4rem;font-size:.95rem;font-weight:700;">'
         '🧪 Inter-Rater Agreement</h4>'
         '<p style="margin:0;font-size:.84rem;color:#475569;">'
@@ -825,24 +902,30 @@ if run_btn:
         try:
             M = run_multi_irar(df, cfg["constructs"], alpha=alpha,
                                n_boot=cfg.get("n_boot", 200))
-            figs_b = [None]
         except Exception as e:
             import traceback as _tb
             st.error(f"⚠️ Analysis could not be completed: {e}")
             st.code(_tb.format_exc()); st.stop()
 
-    st.session_state.update({"ira_M": M, "ira_figs": figs_b, "ira_alpha": alpha})
+    # DEAD CODE REMOVED (2026-10-21): this used to also set
+    # figs_b = [None], store it into st.session_state as "ira_figs", and
+    # read it straight back below into a module-level `figs_b` variable --
+    # confirmed, by reading every remaining line of this file, that
+    # `figs_b` is never referenced again after that round trip. All
+    # charts in this page are built fresh, inline, inside each method's
+    # own tab (e.g. _irar_icc_bar, _irar_pa_gauge) -- there is no
+    # mechanism anywhere that reads a pre-built figure list back out.
+    st.session_state.update({"ira_M": M, "ira_alpha": alpha})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOAD FROM SESSION
 # ══════════════════════════════════════════════════════════════════════════════
 M      = st.session_state["ira_M"]
-figs_b = st.session_state["ira_figs"]
 alpha  = st.session_state.get("ira_alpha", 0.05)
 
 st.success("✓ Analysis complete!")
 
-# ── Comprehensive Inter-Rater Summary (Issue 6) ───────────────────────
+# ── Comprehensive Inter-Rater Summary ───────────────────────
 st.markdown('<div class="sec-title">Inter-Rater Agreement Summary — All Groups</div>',
             unsafe_allow_html=True)
 
@@ -945,8 +1028,8 @@ for _grp_res in M.get("constructs",[]):
 
 # Benchmark reference note
 st.markdown(
-    '<div style="background:#f0f9ff;border-left:3px solid #0284c7;'
-    'padding:10px 14px;border-radius:4px;font-size:.77rem;color:#1e3a5f;'
+    '<div style="background:#f0f9ff;box-shadow:inset 0 0 0 1px rgba(2,132,199,.22);'
+    'padding:10px 14px;border-radius:8px;font-size:.77rem;color:#1e3a5f;'
     'margin-bottom:12px;">'
     '<b>Benchmark References:</b> '
     'Kappa family — Landis & Koch (1977): &lt;0 Poor; 0.00–0.20 Slight; '
@@ -1105,7 +1188,7 @@ for ti, res in enumerate(M["constructs"]):
                                     f"Percentage Agreement — {name}")
                                 if _pagauge:
                                     st.image(fig_to_bytes(_pagauge),
-                                             use_container_width=True)
+                                             width="stretch")
                                     plt.close("all")
                             except Exception:
                                 pass
@@ -1155,7 +1238,7 @@ for ti, res in enumerate(M["constructs"]):
                                 hm=_irar_kappa_heatmap(ct, r1n, r2n,
                                                        f"Confusion Matrix — {name}")
                                 if hm:
-                                    st.image(fig_to_bytes(hm),use_container_width=True)
+                                    st.image(fig_to_bytes(hm),width="stretch")
                                     plt.close("all")
 
                             # ── Kappa Results: SEMUA 3 skema sekaligus ──
@@ -1284,7 +1367,7 @@ for ti, res in enumerate(M["constructs"]):
                                 _wax.spines[["top","right"]].set_visible(False)
                                 _wfig.patch.set_facecolor("white")
                                 _wfig.tight_layout(pad=1.3)
-                                st.image(fig_to_bytes(_wfig), use_container_width=True)
+                                st.image(fig_to_bytes(_wfig), width="stretch")
                                 plt.close("all")
                             except Exception:
                                 pass
@@ -1301,7 +1384,7 @@ for ti, res in enumerate(M["constructs"]):
                                     r_names[0] if r_names else "Rater 1",
                                     r_names[1] if len(r_names)>1 else "Rater 2",
                                     f"Confusion Matrix — {name}")
-                                if hm: st.image(fig_to_bytes(hm),use_container_width=True); plt.close("all")
+                                if hm: st.image(fig_to_bytes(hm),width="stretch"); plt.close("all")
                             it=wk.get("interpretation_text","")
                             if it: st.markdown(f'<div class="interp-box sig">{it}</div>',unsafe_allow_html=True)
 
@@ -1355,7 +1438,7 @@ for ti, res in enumerate(M["constructs"]):
                                 try: return _f(v) if not (isinstance(v,float) and np.isnan(v)) else "—"
                                 except: return "—"
                             _p21=icc.get("icc_2_1",np.nan)
-                            # Fix [8]: metric card labels kept short to prevent truncation
+                            # Metric card labels kept short to prevent truncation
                             # Full label in the detail table below
                             _plbl_short = (icc.get("icc_2_1_label","—") or "—").split(" ")[0]
                             _p2k=icc.get("icc_2_k",np.nan)
@@ -1397,7 +1480,7 @@ for ti, res in enumerate(M["constructs"]):
                             st.markdown(html_tbl(rows,left_cols={0,1}),unsafe_allow_html=True)
                             _icc_fig = _irar_icc_bar(icc, f"ICC — {name}")
                             if _icc_fig:
-                                st.image(fig_to_bytes(_icc_fig), use_container_width=True)
+                                st.image(fig_to_bytes(_icc_fig), width="stretch")
                                 plt.close("all")
                             st.markdown(f'<p class="note-txt">{icc.get("formula_note","")}</p>',unsafe_allow_html=True)
                             st.markdown(
@@ -1426,7 +1509,7 @@ for ti, res in enumerate(M["constructs"]):
                             st.info("Krippendorff's α not computed.")
                         else:
                             _kav=ka.get("alpha",np.nan); _klbl=ka.get("label","—")
-                            _nb=ka.get("n_boot",1000)
+                            _nb=ka.get("n_boot",200)
                             _lo=ka.get("ci_lo",np.nan); _hi=ka.get("ci_hi",np.nan)
                             try: _kci=_fmt_ci(_lo, _hi)
                             except: _kci="—"
@@ -1446,7 +1529,7 @@ for ti, res in enumerate(M["constructs"]):
                             st.markdown(html_tbl(rows,left_cols={0}),unsafe_allow_html=True)
                             _kg = _irar_kripp_gauge(_kav, _klbl, f"Krippendorff's α — {name}")
                             if _kg:
-                                st.image(fig_to_bytes(_kg), use_container_width=True)
+                                st.image(fig_to_bytes(_kg), width="stretch")
                                 plt.close("all")
                             st.markdown(f'<p class="note-txt">{ka.get("formula_note","")}</p>',unsafe_allow_html=True)
                             it=ka.get("interpretation_text","")
@@ -1487,7 +1570,7 @@ for ti, res in enumerate(M["constructs"]):
                             try:
                                 _ac1fig = _irar_single_bar(_av, _albl, "Gwet's AC1", name)
                                 if _ac1fig:
-                                    st.image(fig_to_bytes(_ac1fig), use_container_width=True)
+                                    st.image(fig_to_bytes(_ac1fig), width="stretch")
                                     plt.close("all")
                             except Exception: pass
                             st.markdown(f'<p class="note-txt">{ac1.get("formula_note","")}</p>',unsafe_allow_html=True)
@@ -1529,7 +1612,7 @@ for ti, res in enumerate(M["constructs"]):
                             try:
                                 _spfig = _irar_single_bar(_sv2, _slbl, "Scott's π", name)
                                 if _spfig:
-                                    st.image(fig_to_bytes(_spfig), use_container_width=True)
+                                    st.image(fig_to_bytes(_spfig), width="stretch")
                                     plt.close("all")
                             except Exception: pass
                             if sp.get("dual_ci_note"):
@@ -1571,7 +1654,7 @@ for ti, res in enumerate(M["constructs"]):
                             try:
                                 _bpfig = _irar_single_bar(_bv, _blbl, "Brennan-Prediger", name)
                                 if _bpfig:
-                                    st.image(fig_to_bytes(_bpfig), use_container_width=True)
+                                    st.image(fig_to_bytes(_bpfig), width="stretch")
                                     plt.close("all")
                             except Exception: pass
                             if bp_r.get("dual_ci_note"):
@@ -1608,6 +1691,19 @@ for ti, res in enumerate(M["constructs"]):
                                 'function is directly visible; no single scheme is '
                                 'selected on the user\u2019s behalf.</p>',
                                 unsafe_allow_html=True)
+                            if any(v.get("has_gaps") for v in _computed.values()):
+                                st.warning(
+                                    "\u26a0 This group's rated values skip some integers between "
+                                    "its lowest and highest value (e.g. a value like 65 never "
+                                    "appears, even though lower and higher values do). Gwet's "
+                                    "AC2 treats every integer in that range as a distinct, "
+                                    "equally-spaced category, which fits a rating-scale/rubric "
+                                    "(e.g. 1\u20135) but not a wide-range numeric score. If this "
+                                    "group is really a raw score or other continuous-like "
+                                    "measurement, consider declaring it Interval or Ratio "
+                                    "instead, which use ICC/Lin's CCC and a distance-based "
+                                    "Krippendorff's \u03b1 rather than a category count."
+                                )
                             _scheme_order = ["quadratic", "linear", "radical", "ordinal", "identity"]
                             for _sk in _scheme_order:
                                 if _sk not in _computed:
@@ -1700,9 +1796,24 @@ for ti, res in enumerate(M["constructs"]):
                                 _labels=["CCC ρ_c\n(overall)","Pearson r\n(precision)","C_b\n(accuracy)"]
                                 _cols=["#e94560","#0284c7","#16a34a"]
                                 _cax.barh(_labels,_vals,color=_cols,edgecolor="white",height=0.5)
-                                for thr,col in [(0.75,"#0284c7","Good"),(0.90,"#16a34a","Excellent")]:
+                                # BUG FIX (2026-10-21): this loop unpacked each
+                                # 3-element (threshold, color, label) tuple into
+                                # only 2 loop variables (thr, col) -- a
+                                # ValueError ("too many values to unpack") on
+                                # every single run, silently swallowed by the
+                                # broad `except Exception: pass` below, which
+                                # discarded this ENTIRE visual (the whole bar
+                                # chart, not just the threshold lines) with no
+                                # error ever shown to the user. Confirmed by
+                                # direct execution of the same unpacking
+                                # pattern (ValueError reproduced), not merely
+                                # inferred from reading. Fixed by unpacking all
+                                # three elements, and the previously-unused
+                                # qualitative label is now actually rendered
+                                # (it was dead data before this fix).
+                                for thr,col,qlbl in [(0.75,"#0284c7","Good"),(0.90,"#16a34a","Excellent")]:
                                     _cax.axvline(thr,color=col,ls="--",lw=0.9,alpha=0.7)
-                                    _cax.text(thr,len(_labels)-0.1,f"≥{thr}",ha="center",
+                                    _cax.text(thr,len(_labels)-0.1,f"≥{thr} ({qlbl})",ha="center",
                                               fontsize=7,color=col)
                                 _cax.axvline(0,color=PAL[0],lw=0.8)
                                 _cax.set_xlim(-0.1,1.10)
@@ -1713,7 +1824,7 @@ for ti, res in enumerate(M["constructs"]):
                                     _cax.text(v+0.02,i,f"{v:.3f}",va="center",fontsize=9,color=PAL[0])
                                 _cax.spines[["top","right"]].set_visible(False)
                                 _cfig.patch.set_facecolor("white"); _cfig.tight_layout()
-                                st.image(fig_to_bytes(_cfig),use_container_width=True); plt.close("all")
+                                st.image(fig_to_bytes(_cfig),width="stretch"); plt.close("all")
                             except Exception: pass
                             st.markdown(f'<p class="note-txt">{ccc_r.get("formula_note","")}</p>',unsafe_allow_html=True)
                             st.markdown(
