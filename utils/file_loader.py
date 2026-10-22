@@ -90,6 +90,35 @@ def load_file(f):
     return df
 
 
+def load_sample_file(path):
+    """
+    Load one of the app's bundled sample CSV files directly from a local
+    path (not from a Streamlit file_uploader object), through the SAME
+    cleaning pipeline as an uploaded file, so a sample dataset behaves
+    identically to a user's own upload once loaded.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path to a bundled sample CSV file on disk.
+
+    Returns
+    -------
+    pd.DataFrame
+        Loaded and lightly cleaned DataFrame.
+
+    Raises
+    ------
+    ValueError
+        If the file cannot be parsed.
+    """
+    try:
+        df = pd.read_csv(path)
+    except Exception as e:
+        raise ValueError(f"Could not parse sample file '{path}'. Details: {e}")
+    return _clean(df)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CLEANING
 # ══════════════════════════════════════════════════════════════════════════════
@@ -101,19 +130,44 @@ def _clean(df):
     - Strip leading/trailing whitespace from string cell values
     - Drop completely empty rows and columns
     - Attempt to coerce object columns that look numeric to float
+
+    BUG FIX (2026-10-21): the original order of operations here was
+    (1) dropna(how="all") on rows/columns, THEN (2) strip whitespace from
+    string cells, THEN (3) numeric-coerce. That order missed a whole
+    class of effectively-blank rows: a row whose cells are all
+    whitespace-only strings (e.g. "   ,   ,   " -- a common artifact of
+    a trailing blank line or a spreadsheet export quirk) is NOT NaN, so
+    step (1)'s dropna never removed it; it only became a clean empty
+    string "" once step (2) ran, by which point the row had already
+    survived the "drop empty rows" step. Confirmed directly: a 4-row,
+    3-numeric-column CSV with one such blank row produced
+    get_numeric_cols(df) == [] (ALL THREE otherwise-clean numeric rater
+    columns vanished from numeric-column detection) -- because the
+    leftover "" values counted as "non-null" in step (3)'s 80% numeric-
+    success threshold, dragging every column's measured success rate
+    below the cutoff and leaving them as string dtype. In the app this
+    silently empties the "Select rater columns" multiselect for a file
+    that should have worked perfectly, with no error explaining why.
+    Fixed by stripping whitespace and converting now-empty strings to
+    real NaN BEFORE dropping empty rows/columns, so a whitespace-only
+    row is correctly recognized and dropped as blank, and never pollutes
+    the later numeric-coercion success-rate calculation.
     """
     # Clean column names
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Drop fully empty rows / columns
-    df = df.dropna(how="all").reset_index(drop=True)
-    df = df.dropna(axis=1, how="all")
-
-    # Strip string cells
+    # Strip string cells FIRST, and normalize now-empty strings to real
+    # missing values, so a whitespace-only cell/row is treated as blank.
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].apply(
             lambda x: x.strip() if isinstance(x, str) else x
         )
+        df[col] = df[col].replace("", np.nan)
+
+    # Drop fully empty rows / columns (now correctly catches whitespace-
+    # only rows too, since they are real NaN by this point)
+    df = df.dropna(how="all").reset_index(drop=True)
+    df = df.dropna(axis=1, how="all")
 
     # Attempt numeric coercion for object columns
     for col in df.select_dtypes(include="object").columns:
