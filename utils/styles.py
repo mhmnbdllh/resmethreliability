@@ -42,24 +42,35 @@ button[kind="header"] { display: none !important; }
 
 HEADER = """
 .main-hdr {
-    background: linear-gradient(120deg, #0a0a0a 0%, #1a1a2e 40%, #16213e 100%);
-    padding: 2rem 2.4rem;
-    border-radius: 14px;
+    position: relative;
+    background: radial-gradient(1200px 400px at 85% -10%, rgba(233,69,96,.35), transparent 60%),
+                linear-gradient(120deg, #0a0a0a 0%, #1a1a2e 45%, #16213e 100%);
+    padding: 2.2rem 2.4rem;
+    border-radius: 18px;
     margin-bottom: 1.8rem;
-    border-left: 5px solid #e94560;
-    box-shadow: 0 8px 32px rgba(233, 69, 96, .15);
+    box-shadow: 0 8px 32px rgba(15, 23, 42, .22);
+    overflow: hidden;
+}
+.main-hdr::after {
+    content: '';
+    position: absolute;
+    top: -40%; right: -10%;
+    width: 320px; height: 320px;
+    background: radial-gradient(circle, rgba(233,69,96,.25), transparent 70%);
+    pointer-events: none;
 }
 .main-hdr h1 {
     color: #fff;
-    font-size: 2rem;
+    font-size: 2.1rem;
     font-weight: 700;
     margin: 0 0 .4rem 0;
     letter-spacing: -.4px;
 }
 .main-hdr p {
-    color: #94a3b8;
+    color: #aeb8d4;
     margin: 0;
-    font-size: .92rem;
+    font-size: .95rem;
+    max-width: 48ch;
 }
 .badge {
     display: inline-block;
@@ -82,63 +93,166 @@ HEADER = """
 CARDS = """
 .card-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 1.2rem;
-    margin-bottom: 2rem;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.4rem;
+    margin-bottom: 1.6rem;
 }
-.test-card {
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 1.4rem 1.6rem;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, .05);
-    transition: box-shadow .2s, transform .2s;
-    cursor: pointer;
+
+/* ---- hub card: whole tile is clickable via a stretched st.page_link ----
+   st.markdown() and st.page_link() each render into their own sibling
+   "stElementContainer" inside the SAME stColumn -- an unclosed <div> from
+   one markdown call does NOT actually wrap a later call's widget (each
+   call is parsed as its own isolated HTML fragment). The real shared
+   ancestor of the visible card markup and the page_link widget is the
+   stColumn itself, so that is what gets position:relative + the hover
+   lift, and the page_link is stretched to fill it with :has(). */
+div[data-testid="stColumn"]:has(.hub-card-wrap) {
     position: relative;
+    isolation: isolate;
+    border-radius: 18px;
+    overflow: hidden;
+    transition: transform .25s ease, box-shadow .25s ease;
+    box-shadow: 0 4px 16px rgba(15, 23, 42, .08);
+}
+div[data-testid="stColumn"]:has(.hub-card-wrap):hover {
+    transform: translateY(-5px);
+    box-shadow: 0 16px 36px rgba(15, 23, 42, .16);
+}
+div[data-testid="stColumn"]:has(.hub-card-wrap):hover .hub-card-cta .arrow {
+    transform: translateX(4px);
+}
+.hub-card-wrap {
+    border-radius: 18px;
     overflow: hidden;
 }
-.test-card:hover {
-    box-shadow: 0 8px 24px rgba(233, 69, 96, .12);
-    transform: translateY(-2px);
+.hub-card {
+    padding: 1.7rem 1.8rem 1.4rem;
+    color: #fff;
+    min-height: 210px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
 }
-.test-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0;
-    width: 4px; height: 100%;
-    background: #e94560;
-    border-radius: 4px 0 0 4px;
+.hub-card.ic {
+    background: radial-gradient(900px 300px at 110% -20%, rgba(255,255,255,.18), transparent 60%),
+                linear-gradient(145deg, #0f766e 0%, #0891b2 55%, #0e7490 100%);
 }
-.test-card h4 {
-    color: #1a1a2e;
-    font-size: .95rem;
+.hub-card.ira {
+    background: radial-gradient(900px 300px at 110% -20%, rgba(255,255,255,.18), transparent 60%),
+                linear-gradient(145deg, #6d28d9 0%, #9333ea 55%, #c026d3 100%);
+}
+.hub-card-icon {
+    width: 46px; height: 46px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.16);
+    border-radius: 12px;
+    font-size: 1.4rem;
+    margin-bottom: .9rem;
+    backdrop-filter: blur(2px);
+}
+.hub-card-title {
+    color: #fff;
+    font-size: 1.08rem;
     font-weight: 700;
     margin: 0 0 .5rem;
+    letter-spacing: -.2px;
 }
-.test-card p {
-    color: #475569;
-    font-size: .82rem;
-    margin: 0 0 .8rem;
-    line-height: 1.6;
+.hub-card p {
+    color: rgba(255,255,255,.88);
+    font-size: .83rem;
+    margin: 0 0 1rem;
+    line-height: 1.65;
+    flex-grow: 1;
 }
-.test-card .nonparam-tag {
+.hub-card .nonparam-tag {
     display: inline-block;
-    background: #f1f5f9;
-    color: #64748b;
-    font-size: .7rem;
-    padding: 2px 8px;
+    background: rgba(255,255,255,.16);
+    color: #fff;
+    font-size: .68rem;
+    padding: 3px 9px;
     border-radius: 20px;
     font-family: 'DM Mono', monospace;
+    margin: 0 .3rem .3rem 0;
 }
-.category-hdr {
-    font-size: .78rem;
+.hub-card-cta {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .8rem;
     font-weight: 700;
-    color: #e94560;
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
-    margin: 1.6rem 0 .8rem;
-    padding-bottom: .4rem;
-    border-bottom: 2px solid #f1f5f9;
+    color: #fff;
+    margin-top: .8rem;
+    opacity: .95;
+}
+.hub-card-cta .arrow { display: inline-block; transition: transform .2s ease; }
+
+/* the real navigation control: an invisible st.page_link stretched over
+   the whole stColumn (which also contains the card markup above as a
+   sibling), so the whole tile -- not just a small button -- is the
+   click target, while still using Streamlit's own page-routing.
+
+   Streamlit itself puts `position: relative` on the stPageLink's own
+   immediate parent (stElementContainer), which becomes the CSS
+   "containing block" for an absolutely-positioned child -- so without
+   this next rule, `width/height: 100%` below would resolve against
+   that tiny, content-sized wrapper (it shrinks to the link's own
+   collapsed size) instead of against the stColumn we actually want.
+   Neutralizing position on *only* that one wrapper (scoped narrowly to
+   the wrapper that itself contains a stPageLink, inside one of our two
+   hub-card columns) lets the absolute positioning skip past it to the
+   next positioned ancestor up the chain, which is the stColumn
+   targeted by the rule just above. */
+div[data-testid="stColumn"]:has(.hub-card-wrap) div[data-testid="stElementContainer"]:has([data-testid="stPageLink"]) {
+    position: static !important;
+}
+div[data-testid="stColumn"]:has(.hub-card-wrap) [data-testid="stPageLink"] {
+    position: absolute !important;
+    top: 0 !important; left: 0 !important;
+    width: 100% !important; height: 100% !important;
+    margin: 0 !important;
+    z-index: 5;
+}
+div[data-testid="stColumn"]:has(.hub-card-wrap) [data-testid="stPageLink"] > div,
+div[data-testid="stColumn"]:has(.hub-card-wrap) [data-testid="stPageLink"] a,
+div[data-testid="stColumn"]:has(.hub-card-wrap) [data-testid="stPageLink"] span {
+    display: block !important;
+    width: 100% !important; height: 100% !important;
+    margin: 0 !important;
+}
+div[data-testid="stColumn"]:has(.hub-card-wrap) [data-testid="stPageLink"] a {
+    opacity: 0;
+}
+
+/* ---- usage-guide box below the two hub cards ---- */
+.guide-box {
+    background: #fff;
+    border-radius: 16px;
+    padding: 1.6rem 1.8rem;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .05);
+}
+.guide-box-hdr {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    margin-bottom: .3rem;
+}
+.guide-box-hdr .ic {
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    background: #f1f5f9;
+    border-radius: 9px;
+    font-size: 1.05rem;
+}
+.guide-box-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #1a1a2e;
+}
+.guide-box-sub {
+    color: #64748b;
+    font-size: .82rem;
+    margin: 0 0 .4rem;
 }
 """
 
@@ -187,12 +301,23 @@ TITLES = """
 .sub-title {
     background: #f1f5f9;
     color: #1a1a2e;
-    padding: 7px 14px;
+    padding: 7px 14px 7px 28px;
     border-radius: 6px;
     font-weight: 600;
     font-size: .82rem;
     margin: 1rem 0 .4rem;
-    border-left: 3px solid #e94560;
+    position: relative;
+}
+.sub-title::before {
+    content: "";
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #e94560;
+    transform: translateY(-50%);
 }
 """
 
@@ -303,9 +428,9 @@ BANNERS = """
 INTERP = """
 .interp-box {
     background: linear-gradient(135deg, #f8fafc, #f1f5f9);
-    border-left: 4px solid #0284c7;
+    box-shadow: inset 0 0 0 1px rgba(2, 132, 199, .18);
     padding: 1rem 1.2rem;
-    border-radius: 0 10px 10px 0;
+    border-radius: 10px;
     margin: .7rem 0;
     font-size: .87rem;
     line-height: 1.8;
@@ -313,15 +438,10 @@ INTERP = """
 }
 .interp-box b { color: #0284c7; }
 .interp-box.sig {
-    border-left-color: #16a34a;
+    box-shadow: inset 0 0 0 1px rgba(22, 163, 74, .22);
     background: linear-gradient(135deg, #f0fdf4, #dcfce7);
 }
 .interp-box.sig b { color: #16a34a; }
-.interp-box.nonsig {
-    border-left-color: #dc2626;
-    background: linear-gradient(135deg, #fef2f2, #fee2e2);
-}
-.interp-box.nonsig b { color: #dc2626; }
 """
 
 
@@ -332,27 +452,27 @@ INTERP = """
 ALERTS = """
 .warn-box {
     background: #fffbeb;
-    border-left: 4px solid #f59e0b;
+    box-shadow: inset 0 0 0 1px rgba(245, 158, 11, .32);
     padding: .7rem 1rem;
-    border-radius: 0 6px 6px 0;
+    border-radius: 8px;
     font-size: .82rem;
     color: #92400e;
     margin: .4rem 0;
 }
 .info-box {
     background: #eff6ff;
-    border-left: 4px solid #3b82f6;
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, .28);
     padding: .7rem 1rem;
-    border-radius: 0 6px 6px 0;
+    border-radius: 8px;
     font-size: .82rem;
     color: #1e40af;
     margin: .4rem 0;
 }
 .norm-rec-box {
     background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
-    border-left: 4px solid #0284c7;
+    box-shadow: inset 0 0 0 1px rgba(2, 132, 199, .24);
     padding: .8rem 1rem;
-    border-radius: 0 8px 8px 0;
+    border-radius: 10px;
     font-size: .82rem;
     color: #0c4a6e;
     margin: .5rem 0;
@@ -366,8 +486,6 @@ ALERTS = """
 # ══════════════════════════════════════════════════════════════════════════════
 
 TEXT = """
-.pass  { color: #16a34a; font-weight: 700; }
-.fail  { color: #dc2626; font-weight: 700; }
 .note-txt {
     font-size: .74rem;
     color: #64748b;
