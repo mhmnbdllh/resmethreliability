@@ -106,7 +106,8 @@ def _methodological_notes(M, alpha):
             "Cohen's Kappa (κ)",
             "κ = (P_o − P_e) / (1 − P_e). P_o = observed agreement; "
             "P_e = expected agreement by chance = Σ p_c(r1) × p_c(r2). "
-            "SE via Fleiss, Cohen & Everitt (1969); z-test; two-tailed p. "
+            "SE for z and two-tailed p: Fleiss, Cohen & Everitt (1969), Eq. 9 "
+            "(H0: κ = 0); SE for the confidence interval: Eq. 8 of the same paper. "
             "Known limitation: κ can be paradoxically low when one category "
             "dominates (prevalence paradox) or when raters differ in marginal "
             "distributions (bias paradox). "
@@ -123,7 +124,7 @@ def _methodological_notes(M, alpha):
             "P_e(AC1) = (1/(q−1)) × Σ_c π_c(1−π_c), where π_c is the grand "
             "marginal proportion of category c across all raters. "
             "More stable than Cohen's κ under extreme marginal distributions "
-            "(avoids the prevalence paradox). Variance estimated via jackknife. "
+            "(Gwet, 2008). Variance: delete-one-unit jackknife (Efron & Tibshirani, 1993). "
             "Benchmarks: Landis & Koch (1977), used here only as a conventional "
             "descriptive scale — Vach & Gerke (2023, MethodsX, 10, 102212) argue "
             "AC1 and κ respond differently to prevalence and that AC1 can be "
@@ -141,23 +142,23 @@ def _methodological_notes(M, alpha):
             "marginal proportions rather than their product. "
             "Differs from Cohen's κ only in P_e computation; typically yields "
             "slightly lower estimates when rater marginals differ. "
-            "SE: Cohen's (1960) large-sample approximation, adapted to this "
-            "coefficient's own P_e — not Fleiss, Cohen & Everitt (1969), whose "
-            "more complex formula is used for Cohen's κ's own SE above; see "
-            "the AC2/Scott's π result card's confidence-interval note for the "
-            "corrected citation and a documented, independently-verified "
-            "limitation (a moderate, non-vanishing SE overestimate). "
+            "With two raters Scott's π equals Fleiss' (1971) κ, so its standard "
+            "errors follow that literature: the null-hypothesis SE of Fleiss, Nee "
+            "& Landis (1979) for z and p, and the general-purpose SE of Gwet "
+            "(2021) for the confidence intervals. "
             "Reference: Scott (1955). Public Opinion Quarterly, 19(3), 321–325."
         ))
 
     if "bp" in all_methods:
         notes.append((
             "Brennan-Prediger Coefficient (κ_BP)",
-            "κ_BP = (P_o − 1/q) / (1 − 1/q). Assumes uniform category distribution "
-            f"(P_e = 1/q) — the most conservative expected agreement. "
-            "Appropriate when categories are equally likely a priori (e.g., "
-            "forced-choice classification tasks). Avoids both the prevalence and "
-            "bias paradoxes that affect Cohen's κ. "
+            "κ_BP = (P_o − 1/q) / (1 − 1/q). Chance agreement is fixed at "
+            "P_e = 1/q, the agreement expected if raters used the q declared "
+            "categories uniformly at random; it does not depend on the observed "
+            "marginals. Because 1/q is the smallest chance term of the Scott/Fleiss "
+            "type, κ_BP is never below Scott's π for the same data. With q = 2 it "
+            "equals the prevalence-adjusted bias-adjusted kappa (Byrt, Bishop & "
+            "Carlin, 1993). "
             "Reference: Brennan & Prediger (1981). Educational and Psychological "
             "Measurement, 41(3), 687–699."
         ))
@@ -169,6 +170,8 @@ def _methodological_notes(M, alpha):
             "κ = (P̄ − P̄_e) / (1 − P̄_e). "
             "P̄ = mean per-unit agreement across all rater pairs; "
             "P̄_e = Σ_c p̄²_c (expected by chance). "
+            "SE for z and p: Fleiss, Nee & Landis (1979) (valid under H0: κ = 0); "
+            "SE for the confidence interval: Gwet (2021). "
             "Per-category κ_j also reported. "
             "Note: Fleiss' κ treats all categories as nominal (unordered). "
             "For ordinal multi-rater data, Gwet's AC2 or Krippendorff's α "
@@ -179,12 +182,13 @@ def _methodological_notes(M, alpha):
     if "weighted" in all_methods:
         notes.append((
             "Weighted Cohen's Kappa (κ_w)",
-            "κ_w = 1 − Σ w_cc' d_cc' / Σ w_cc' e_cc'. "
-            "Quadratic weights: w_cc' = 1 − (c−c')² / (q−1)². "
-            "Linear weights: w_cc' = 1 − |c−c'| / (q−1). "
-            "Quadratic weights recommended for Likert-type scales — larger "
-            "disagreements are penalised proportionally more. "
-            "Note: κ_w (quadratic) ≈ ICC(A,1) for continuous data. "
+            "κ_w = (Σ w_cc' p_cc' − Σ w_cc' p_c· p_·c') / (1 − Σ w_cc' p_c· p_·c'), "
+            "with agreement weights over the q categories of the declared scale: "
+            "quadratic w_cc' = 1 − (c−c')² / (q−1)²; linear w_cc' = 1 − |c−c'| / (q−1). "
+            "Quadratic weights penalise larger disagreements disproportionately "
+            "more; with quadratic weights κ_w is closely related to the intraclass "
+            "correlation coefficient (Fleiss & Cohen, 1973). SE, z and p: Fleiss, "
+            "Cohen & Everitt (1969). "
             "Reference: Cohen (1968). Psychological Bulletin, 70(4), 213–220."
         ))
 
@@ -193,7 +197,7 @@ def _methodological_notes(M, alpha):
             "Gwet's AC2",
             "Weighted version of AC1 for ordinal data, computed under all five "
             "standard weighting schemes (Quadratic/Fleiss-Cohen, Linear/Cicchetti-"
-            "Allison, Radical, Ordinal/Krippendorff-style, and Identity) — see the "
+            "Allison, Radical, Ordinal, and Identity; Gwet, 2014) — see the "
             "AC2 tab for the complete set with individual guidance and references. "
             "AC2 = (P_o_w − P_e_w) / (1 − P_e_w). "
             "P_e_w = u × Σ_k π_k(1−π_k) / (q(q−1)), where u = the sum of every "
@@ -252,7 +256,8 @@ def _methodological_notes(M, alpha):
             "nominal d(a,b)=0/1; ordinal d(a,b)=(Σn_g from a to b − (n_a+n_b)/2)²; "
             "interval d(a,b)=(a−b)²; ratio d(a,b)=((a−b)/(a+b))². "
             "Handles missing data and any number of raters. "
-            f"{pct}% CI: percentile bootstrap ({_boot_txt}, seed=42). "
+            f"{pct}% CI: percentile bootstrap over rated units ({_boot_txt}, "
+            "units resampled with replacement, seed=42). "
             "Thresholds (Krippendorff, 2004): α ≥ .800 reliable; "
             ".667 ≤ α < .800 tentatively acceptable; α < .667 unreliable. "
             "Reference: Krippendorff (2004). Content Analysis (2nd ed.)."
@@ -272,8 +277,12 @@ def _methodological_notes(M, alpha):
 
     notes.append((
         "Missing Data",
-        "Listwise deletion per rating group: only units with complete ratings "
-        "from all raters are included. N per group is reported."
+        "Krippendorff's α uses every unit rated by at least two raters in the "
+        "group (pairable values), so a unit with some missing ratings still "
+        "contributes. Every other coefficient requires a rating from every "
+        "selected rater and therefore uses only the units with complete "
+        "ratings (listwise deletion within the rating group). The number of "
+        "units used is reported with each coefficient."
     ))
 
     return notes
@@ -374,40 +383,31 @@ def _irar_kripp_gauge(alpha_val, label, title="Krippendorff's α"):
     return fig
 
 
-def _irar_pa_gauge(pa_val, ci_lo, ci_hi, title="Percentage Agreement"):
+def _irar_pa_gauge(pa_val, ci_lo, ci_hi, title="Percentage Agreement", ci_level="95%"):
     """Gauge for % Agreement — same readability standard as Kripp gauge."""
     fig, ax = plt.subplots(figsize=(8.5, 2.8))
     ax.set_xlim(-0.02, 1.10); ax.set_ylim(0, 1)
     ax.set_yticks([])
     ax.spines[["top","right","left"]].set_visible(False)
-    ax.barh([0.5],[0.70],left=0.0, height=0.38,color="#fee2e2",alpha=0.50,zorder=1)
-    ax.barh([0.5],[0.10],left=0.70,height=0.38,color="#fef9c3",alpha=0.50,zorder=1)
-    ax.barh([0.5],[0.10],left=0.80,height=0.38,color="#bbf7d0",alpha=0.50,zorder=1)
-    ax.barh([0.5],[0.10],left=0.90,height=0.38,color="#dcfce7",alpha=0.60,zorder=1)
-    for mid, col, lbl in [(0.35,"#dc2626","Low"),
-                           (0.75,"#ca8a04","Fair"),
-                           (0.85,"#0284c7","Good"),
-                           (0.95,"#16a34a","High")]:
-        ax.text(mid, 0.50, lbl, ha="center", va="center", fontsize=7.5,
-                color=col, alpha=0.65,
-                transform=ax.get_xaxis_transform(), zorder=2)
-    for thr, col, lbl in [(0.70,"#f59e0b","70%"),(0.80,"#0284c7","80%"),(0.90,"#16a34a","90%")]:
-        ax.axvline(thr, color=col, lw=1.8, zorder=4, alpha=0.85)
-        ax.text(thr, 0.97, lbl, ha="center", va="top", fontsize=8.5,
-                color=col, fontweight="bold",
-                transform=ax.get_xaxis_transform(), zorder=5,
-                bbox=dict(boxstyle="round,pad=0.20",fc="white",ec="none",alpha=0.88))
+    # Neutral axis: percentage agreement has no published benchmark scale,
+    # so no evaluative zones or threshold lines are drawn.
+    ax.barh([0.5],[1.0],left=0.0, height=0.38,color="#f1f5f9",alpha=0.90,zorder=1)
+    try:
+        if not (np.isnan(float(ci_lo)) or np.isnan(float(ci_hi))):
+            ax.barh([0.5],[float(ci_hi)-float(ci_lo)],left=float(ci_lo),
+                    height=0.38,color="#bae6fd",alpha=0.90,zorder=2)
+    except Exception:
+        pass
     try:
         pv = float(pa_val)
         if not np.isnan(pv):
             pv_c = max(min(pv,1.07),0.0)
-            col = ("#16a34a" if pv>=.90 else "#0284c7" if pv>=.80
-                   else "#f59e0b" if pv>=.70 else "#dc2626")
+            col = "#0369a1"
             ax.plot([pv_c],[0.50],marker="v",markersize=22,color=col,zorder=6)
             lbl_txt = f"PA = {pv*100:.1f}%"
             try:
                 if not (np.isnan(float(ci_lo)) or np.isnan(float(ci_hi))):
-                    lbl_txt += f"\n95% CI [{float(ci_lo)*100:.1f}–{float(ci_hi)*100:.1f}%]"
+                    lbl_txt += f"\n{ci_level} CI [{float(ci_lo)*100:.1f}–{float(ci_hi)*100:.1f}%]"
             except Exception:
                 pass
             ax.text(pv_c,0.91,lbl_txt,ha="center",va="top",fontsize=10,
@@ -583,17 +583,9 @@ with st.sidebar:
     _SAMPLE_NONE = "— None (I'll upload my own file) —"
     with st.expander("📂 Try with sample data"):
         st.caption(
-            # WORDING (2026-10-21): changed "real" -> "illustrative" to
-            # match the manuscript's own Ethics statement, which already
-            # describes these sample files as "synthetic or de-identified
-            # illustrative rating data" -- the two had been contradicting
-            # each other (this page calling them "real," the manuscript
-            # calling them synthetic/de-identified). Actual data
-            # provenance is a fact only the user/dataset owner can
-            # confirm, so this is the conservative choice (consistent
-            # with the Ethics text already committed to in the delivered
-            # manuscript) rather than a guess -- flagged for the user's
-            # confirmation rather than silently resolved either way.
+            # The sample files are described as "illustrative" because
+            # they serve to demonstrate the procedure; they carry no
+            # personal identifiers.
             "Three illustrative rating datasets (N=86 units, up to 4 raters each) — "
             "one per data type family. Pick one below to load it straight into "
             "the analysis, or download it first to inspect or edit."
@@ -678,8 +670,8 @@ with st.sidebar:
             help="Each group = one set of raters rating the same units on one aspect.")
 
         dtype_options = {
-            "Dichotomous (0/1, Yes/No, Pass/Fail)":           "dichotomous",
-            "Nominal (A/B/C, error type, unordered)":          "nominal",
+            "Dichotomous (two categories coded, e.g., 0/1)":  "dichotomous",
+            "Nominal (unordered categories, integer-coded)":   "nominal",
             "Ordinal (Likert 1–5, rubric 1–4, ordered)":       "ordinal",
             "Interval (scores 0–100, continuous)":             "interval",
             "Ratio (time, weight, continuous with true zero)":  "ratio",
@@ -706,8 +698,9 @@ with st.sidebar:
                 list(dtype_options.keys()),
                 key=f"irar_dtype_{i}",
                 help=(
-                    "Dichotomous: exactly 2 categories (0/1, Yes/No).\n"
-                    "Nominal: 3+ unordered categories (error type, A/B/C).\n"
+                    "Dichotomous: exactly 2 categories, integer-coded (e.g., 0 = No, 1 = Yes).\n"
+                    "Nominal: 3+ unordered categories, each coded as an integer "
+                    "(e.g., 1 = error type A, 2 = type B, 3 = type C).\n"
                     "Ordinal: ordered levels (Likert scale, rubric).\n"
                     "Interval: continuous scores without true zero.\n"
                     "Ratio: continuous with true zero (time, frequency)."))
@@ -812,36 +805,27 @@ with st.sidebar:
             st.markdown("")
 
         # Bootstrap option — shown only when Krippendorff will run
-        n_boot_irar = 200
+        n_boot_irar = 1000
         if kripp_will_run:
             st.markdown("---")
             st.markdown("**Krippendorff's α — Bootstrap CI**")
             _boot_opts = {
-                "200 resamples (fast, ~1–3 s)":   200,
-                "400 resamples (moderate, ~2–6 s)": 400,
-                "600 resamples (slower)":           600,
-                "1,000 resamples (may be slow for ordinal/ratio data)": 1000,
+                "1,000 resamples":  1000,
+                "2,000 resamples":  2000,
+                "5,000 resamples":  5000,
+                "10,000 resamples": 10000,
             }
             _boot_choice = st.selectbox(
-                "Bootstrap resamples for 95% CI",
+                f"Bootstrap resamples for the {round((1 - alpha) * 100):g}% CI",
                 list(_boot_opts.keys()),
                 index=0,
                 key="irar_n_boot",
                 help=(
-                    "Larger values give more stable CI estimates but increase "
-                    "computation time. For ordinal or ratio data with many "
-                    "observations, keep ≤ 400 to avoid long runtimes."))
+                    "Rated units are resampled with replacement and α is "
+                    "recomputed on each resample. More resamples give a "
+                    "smoother, more reproducible interval; 10,000 resamples "
+                    "take a few seconds."))
             n_boot_irar = _boot_opts[_boot_choice]
-            # Warn for ordinal/ratio + large n_boot
-            _ordinal_ratio = any(
-                c.get("data_type") in ("ordinal","ratio")
-                for c in constructs)
-            if _ordinal_ratio and n_boot_irar > 400:
-                st.warning(
-                    "⚠️ Ordinal or ratio data selected with "
-                    f"{n_boot_irar:,} bootstrap resamples. "
-                    "This may take considerably longer. "
-                    "Consider 200–400 resamples for faster results.")
 
         # DEAD CODE REMOVED (2026-10-21): `auto_rev`, `rev_method`, `smin`,
         # `smax` were assigned here but never read anywhere else in this
@@ -901,7 +885,7 @@ if run_btn:
     with st.spinner("Computing analysis…"):
         try:
             M = run_multi_irar(df, cfg["constructs"], alpha=alpha,
-                               n_boot=cfg.get("n_boot", 200))
+                               n_boot=cfg.get("n_boot", 1000))
         except Exception as e:
             import traceback as _tb
             st.error(f"⚠️ Analysis could not be completed: {e}")
@@ -922,6 +906,7 @@ if run_btn:
 # ══════════════════════════════════════════════════════════════════════════════
 M      = st.session_state["ira_M"]
 alpha  = st.session_state.get("ira_alpha", 0.05)
+_cl    = f"{round((1 - alpha) * 100):g}%"   # confidence level label, e.g. "95%"
 
 st.success("✓ Analysis complete!")
 
@@ -1118,7 +1103,7 @@ for ti, res in enumerate(M["constructs"]):
                             c1,c2,c3=st.columns(3)
                             c1.metric("Percentage Agreement",
                                       f"{_pa*100:.1f}%" if not np.isnan(_pa) else "—")
-                            c2.metric("95% CI", _ci_pa)
+                            c2.metric(f"{_cl} CI", _ci_pa)
                             c3.metric("N units / Raters",
                                       f"{n_units} / {k_raters}")
                             _total_pairs = pa_res.get("total_pairwise_comparisons",
@@ -1127,7 +1112,7 @@ for ti, res in enumerate(M["constructs"]):
                                   ["Percentage Agreement",
                                    f"{_pa*100:.2f}%" if not np.isnan(_pa) else "—"],
                                   ["As proportion", _f(_pa)],
-                                  ["95% CI (binomial)", _ci_pa],
+                                  [f"{_cl} CI (unit-level t-interval)", _ci_pa],
                                   ["N (units)", str(n_units)],
                                   ["k (raters)", str(k_raters)],
                                   ["Total pairwise comparisons", str(_total_pairs)]]
@@ -1185,7 +1170,8 @@ for ti, res in enumerate(M["constructs"]):
                             try:
                                 _pagauge = _irar_pa_gauge(
                                     _pa, _lo, _hi,
-                                    f"Percentage Agreement — {name}")
+                                    f"Percentage Agreement — {name}",
+                                    ci_level=_cl)
                                 if _pagauge:
                                     st.image(fig_to_bytes(_pagauge),
                                              width="stretch")
@@ -1215,7 +1201,9 @@ for ti, res in enumerate(M["constructs"]):
                             _kp=ck.get("kappa_p",np.nan)
                             c1,c2,c3=st.columns(3)
                             c1.metric("Cohen's κ (unweighted)",_f(_kv))
-                            c2.metric("Interpretation",_klbl.split(" (")[0] if _klbl else "—")
+                            c2.metric(f"{_cl} CI (z-basis)",
+                                      _fmt_ci(variants.get("unweighted",{}).get("ci_lo_z",np.nan),
+                                              variants.get("unweighted",{}).get("ci_hi_z",np.nan)))
                             c3.metric("Sig.(2-tailed)",_p(_kp) if not np.isnan(_kp) else "—")
 
                             st.markdown(
@@ -1241,30 +1229,32 @@ for ti, res in enumerate(M["constructs"]):
                                     st.image(fig_to_bytes(hm),width="stretch")
                                     plt.close("all")
 
-                            # ── Kappa Results: SEMUA 3 skema sekaligus ──
-                            st.markdown('<div class="sub-title">Kappa Results (All Weighting Schemes)</div>',
+                            # ── Kappa result (unweighted: Cohen's κ for nominal or
+                            # dichotomous categories; weighted κ, which assumes
+                            # ordered categories, is reported in the Weighted κ
+                            # tab of ordinal rating groups) ──
+                            st.markdown('<div class="sub-title">Kappa Result</div>',
                                         unsafe_allow_html=True)
-                            scheme_rows = [["Scheme","κ","SE (null, Eq.9)","SE (general, Eq.8)","z","Sig.(2-tailed)","Interpretation"]]
-                            for scheme_key, scheme_label in [("unweighted","Unweighted"),
-                                                               ("linear","Linear"),
-                                                               ("quadratic","Quadratic")]:
-                                v = variants.get(scheme_key, {})
-                                scheme_rows.append([
-                                    scheme_label,
-                                    _f(v.get("kappa",np.nan)),
-                                    _f(v.get("se_null",np.nan)),
-                                    _f(v.get("se_general",np.nan)),
-                                    _f(v.get("z",np.nan)),
-                                    _p(v.get("p",np.nan)) if not np.isnan(v.get("p",np.nan)) else "—",
-                                    v.get("label","—").split(" (")[0] if v.get("label") else "—",
-                                ])
+                            v = variants.get("unweighted", {})
+                            scheme_rows = [["Coefficient","κ","SE (null, Eq.9)","z","Sig.(2-tailed)",
+                                            "SE (general, Eq.8)",f"{_cl} CI (z-basis)",
+                                            f"{_cl} CI (t-basis, df={v.get('ci_df','—')})","Interpretation"],
+                                           ["Cohen's κ (unweighted)",
+                                            _f(v.get("kappa",np.nan)),
+                                            _f(v.get("se_null",np.nan)),
+                                            _f(v.get("z",np.nan)),
+                                            _p(v.get("p",np.nan)) if not np.isnan(v.get("p",np.nan)) else "—",
+                                            _f(v.get("se_general",np.nan)),
+                                            _fmt_ci(v.get("ci_lo_z",np.nan), v.get("ci_hi_z",np.nan)),
+                                            _fmt_ci(v.get("ci_lo_t",np.nan), v.get("ci_hi_t",np.nan)),
+                                            v.get("label","—").split(" (")[0] if v.get("label") else "—"]]
                             st.markdown(html_tbl(scheme_rows,left_cols={0}),unsafe_allow_html=True)
                             st.markdown(
-                                '<p class="note-txt">For k=2 categories, all three schemes are '
-                                'mathematically identical (only one inter-category distance is '
-                                'possible) — per Fleiss, J.L., &amp; Cohen, J. (1973). Educational '
-                                'and Psychological Measurement, 33(3), 613–619. They diverge for '
-                                '3+ ordered categories.</p>', unsafe_allow_html=True)
+                                '<p class="note-txt">SE (null, Eq.9) is the H0: κ = 0 standard error '
+                                'used for z and p; SE (general, Eq.8) is the large-sample standard '
+                                'error of the estimate and is used for the confidence interval '
+                                '(Fleiss, Cohen &amp; Everitt, 1969).</p>',
+                                unsafe_allow_html=True)
 
                             # ── Agreement Breakdown ──
                             st.markdown('<div class="sub-title">Agreement Breakdown</div>',
@@ -1298,7 +1288,7 @@ for ti, res in enumerate(M["constructs"]):
 
                             _ck_ci_note = ck.get("kappa_ci_note","")
                             if _ck_ci_note:
-                                st.markdown(f'<p class="note-txt"><b>Why no confidence interval:</b> {_ck_ci_note}</p>',unsafe_allow_html=True)
+                                st.markdown(f'<p class="note-txt"><b>Standard errors and confidence interval:</b> {_ck_ci_note}</p>',unsafe_allow_html=True)
 
                             # ── Referensi lengkap ──
                             _ref_note = ck.get("formula_reference_note","")
@@ -1326,13 +1316,19 @@ for ti, res in enumerate(M["constructs"]):
                             c1.metric("κ_w (quadratic — primary)",_f(_kwq))
                             c2.metric("κ_w (linear)",_f(_kwl))
                             c3.metric("κ (unweighted)",_f(_ku))
-                            rows=[["Statistic","Value","SE","z","Sig."],
-                                  ["κ (unweighted)",_f(_ku),_f(wk.get("kappa_ase")),
-                                   _f(wk.get("kappa_z")),_p(wk.get("kappa_p"))],
-                                  ["κ_w (linear)",_f(_kwl),_f(wk.get("kappa_linear_ase")),
-                                   _f(wk.get("kappa_linear_z")),_p(wk.get("kappa_linear_p"))],
-                                  ["κ_w (quadratic — primary)",_f(_kwq),_f(wk.get("kappa_quadratic_ase")),
-                                   _f(wk.get("kappa_quadratic_z")),_p(wk.get("kappa_quadratic_p"))]]
+                            _wv = wk.get("variants", {})
+                            rows=[["Statistic","Value","SE (null, Eq.9)","z","Sig.",
+                                   "SE (general, Eq.8)",f"{_cl} CI (z-basis)",f"{_cl} CI (t-basis)"]]
+                            for _wkey, _wlab in (("unweighted","κ (unweighted)"),
+                                                 ("linear","κ_w (linear)"),
+                                                 ("quadratic","κ_w (quadratic — primary)")):
+                                _vv = _wv.get(_wkey, {})
+                                rows.append([_wlab, _f(_vv.get("kappa",np.nan)),
+                                             _f(_vv.get("se_null",np.nan)), _f(_vv.get("z",np.nan)),
+                                             _p(_vv.get("p",np.nan)) if not np.isnan(_vv.get("p",np.nan)) else "—",
+                                             _f(_vv.get("se_general",np.nan)),
+                                             _fmt_ci(_vv.get("ci_lo_z",np.nan), _vv.get("ci_hi_z",np.nan)),
+                                             _fmt_ci(_vv.get("ci_lo_t",np.nan), _vv.get("ci_hi_t",np.nan))])
                             st.markdown(html_tbl(rows,left_cols={0}),unsafe_allow_html=True)
                             # Visual: multi-value bar — quadratic primary on top
                             try:
@@ -1398,16 +1394,21 @@ for ti, res in enumerate(M["constructs"]):
                             _fp2=fk.get("kappa_p",np.nan)
                             c1,c2,c3=st.columns(3)
                             c1.metric("Fleiss' κ",_f(_fk))
-                            c2.metric("Interpretation",_flbl.split(" (")[0] if _flbl else "—")
+                            c2.metric(f"{_cl} CI (t-basis)",
+                                      _fmt_ci(fk.get("ci_lo_t",np.nan), fk.get("ci_hi_t",np.nan)))
                             c3.metric("Sig.(2-tailed)",_p(_fp2) if not np.isnan(_fp2) else "—")
                             rows=[["Statistic","Value"],
                                   ["Fleiss' κ",_f(_fk)],
                                   ["P\u0304 (observed agreement)",_f(fk.get("P_bar",np.nan))],
                                   ["P\u0304_e (expected/chance agreement)",_f(fk.get("P_e",np.nan))],
-                                  ["SE",_f(fk.get("kappa_se",np.nan))],
+                                  ["SE (null; Fleiss, Nee & Landis, 1979)",_f(fk.get("kappa_se",np.nan))],
                                   ["z",_f(fk.get("kappa_z",np.nan))],
                                   ["Sig.(2-tailed)",_p(_fp2) if not np.isnan(_fp2) else "—"],
-                                  ["95% CI","Not reported \u2014 see note below"],
+                                  ["SE (general; Gwet, 2021)",_f(fk.get("kappa_se_general",np.nan))],
+                                  [f"{_cl} CI (t-basis, df={fk.get('ci_df','—')})",
+                                   _fmt_ci(fk.get("ci_lo_t",np.nan), fk.get("ci_hi_t",np.nan))],
+                                  [f"{_cl} CI (z-basis)",
+                                   _fmt_ci(fk.get("ci_lo_z",np.nan), fk.get("ci_hi_z",np.nan))],
                                   ["Interpretation",_flbl],
                                   ["N (units)",str(n_units)],["k (raters)",str(k_raters)]]
                             st.markdown(html_tbl(rows,left_cols={0}),unsafe_allow_html=True)
@@ -1422,7 +1423,7 @@ for ti, res in enumerate(M["constructs"]):
                             st.markdown(f'<p class="note-txt">{fk.get("formula_note","")}</p>',unsafe_allow_html=True)
                             _fk_ci_note = fk.get("kappa_ci_note","")
                             if _fk_ci_note:
-                                st.markdown(f'<p class="note-txt"><b>Why no confidence interval:</b> {_fk_ci_note}</p>',unsafe_allow_html=True)
+                                st.markdown(f'<p class="note-txt"><b>Standard errors and confidence interval:</b> {_fk_ci_note}</p>',unsafe_allow_html=True)
                             it=fk.get("interpretation_text","")
                             if it: st.markdown(f'<div class="interp-box sig">{it}</div>',unsafe_allow_html=True)
 
@@ -1446,7 +1447,7 @@ for ti, res in enumerate(M["constructs"]):
                             c1.metric("ICC(A,1) — Primary",_fv(_p21))
                             c2.metric("ICC(A,k)",_fv(_p2k))
                             c3.metric("Interpretation",_plbl_short)
-                            rows=[["ICC Form","Description","ICC","95% CI","p (F-test)"],
+                            rows=[["ICC Form","Description","ICC",f"{_cl} CI","p (F-test)"],
                                   ["ICC(1,1)",
                                    "One-way random, single rater",
                                    _fv(icc.get("icc_1_1","—")),
@@ -1509,17 +1510,17 @@ for ti, res in enumerate(M["constructs"]):
                             st.info("Krippendorff's α not computed.")
                         else:
                             _kav=ka.get("alpha",np.nan); _klbl=ka.get("label","—")
-                            _nb=ka.get("n_boot",200)
+                            _nb=ka.get("n_boot",1000)
                             _lo=ka.get("ci_lo",np.nan); _hi=ka.get("ci_hi",np.nan)
                             try: _kci=_fmt_ci(_lo, _hi)
                             except: _kci="—"
                             c1,c2,c3=st.columns(3)
                             c1.metric("Krippendorff's α",_f(_kav))
-                            c2.metric(f"95% CI ({_nb:,} resamples)",_kci)
+                            c2.metric(f"{_cl} CI ({_nb:,} resamples)",_kci)
                             c3.metric("Interpretation",_klbl.split(" (")[0] if _klbl else "—")
                             rows=[["Statistic","Value"],
                                   ["Krippendorff's α",_f(_kav)],
-                                  [f"95% CI ({_nb:,} bootstrap resamples)",_kci],
+                                  [f"{_cl} CI ({_nb:,} bootstrap resamples)",_kci],
                                   ["Data type / metric",ka.get("data_type","—").title()],
                                   ["N (units)",str(n_units)],
                                   ["k (raters)",str(k_raters)],
@@ -1552,15 +1553,15 @@ for ti, res in enumerate(M["constructs"]):
                             except: _aci_t="—"
                             c1,c2,c3=st.columns(3)
                             c1.metric("Gwet's AC1",_f(_av))
-                            c2.metric("95% CI (z-basis)",_aci_z)
+                            c2.metric(f"{_cl} CI (z-basis)",_aci_z)
                             c3.metric("Interpretation",_albl.split(" (")[0] if _albl else "—")
                             rows=[["Statistic","Value"],
                                   ["Gwet's AC1",_f(_av)],
                                   ["SE (jackknife)",_f(_ase)],
                                   ["z",_f(_az)],
                                   ["p (2-tailed)",_p(_ap) if not np.isnan(_ap) else "—"],
-                                  ["95% CI (z-basis)",_aci_z],
-                                  ["95% CI (t-basis, df="+str(ac1.get("ci_df","—"))+")",_aci_t],
+                                  [f"{_cl} CI (z-basis)",_aci_z],
+                                  [f"{_cl} CI (t-basis, df="+str(ac1.get("ci_df","—"))+")",_aci_t],
                                   ["N (units)",str(n_units)],
                                   ["k (raters)",str(k_raters)],
                                   ["q (categories)",str(ac1.get("q","—"))],
@@ -1595,16 +1596,18 @@ for ti, res in enumerate(M["constructs"]):
                             except: _sci_t="—"
                             c1,c2,c3=st.columns(3)
                             c1.metric("Scott's π",_f(_sv2))
-                            c2.metric("95% CI (z-basis)",_sci_z)
+                            c2.metric(f"{_cl} CI (z-basis)",_sci_z)
                             c3.metric("Interpretation",_slbl.split(" (")[0] if _slbl else "—")
                             rows=[["Statistic","Value"],
                                   ["Scott's π",_f(_sv2)],
                                   ["P_o (observed)",_f(sp.get("Po",np.nan))],
                                   ["P_e (Scott averaged marginals)",_f(sp.get("Pe",np.nan))],
-                                  ["SE",_f(_sse)],["z",_f(_sz)],
+                                  ["SE under H0 (Fleiss, Nee & Landis, 1979; for z and p)",_f(sp.get("se_null",np.nan))],
+                                  ["z",_f(_sz)],
                                   ["p (2-tailed)",_p(_spp) if not np.isnan(_spp) else "—"],
-                                  ["95% CI (z-basis)",_sci_z],
-                                  ["95% CI (t-basis, df="+str(sp.get("ci_df","—"))+")",_sci_t],
+                                  ["SE, general (Gwet, 2021; for the CI)",_f(_sse)],
+                                  [f"{_cl} CI (z-basis)",_sci_z],
+                                  [f"{_cl} CI (t-basis, df="+str(sp.get("ci_df","—"))+")",_sci_t],
                                   ["N (units)",str(n_units)],
                                   ["Interpretation",_slbl]]
                             st.markdown(html_tbl(rows,left_cols={0}),unsafe_allow_html=True)
@@ -1637,7 +1640,7 @@ for ti, res in enumerate(M["constructs"]):
                             except: _bci_t="—"
                             c1,c2,c3=st.columns(3)
                             c1.metric("Brennan-Prediger",_f(_bv))
-                            c2.metric("95% CI (z-basis)",_bci_z)
+                            c2.metric(f"{_cl} CI (z-basis)",_bci_z)
                             c3.metric("Interpretation",_blbl.split(" (")[0] if _blbl else "—")
                             rows=[["Statistic","Value"],
                                   ["Brennan-Prediger (κ_BP)",_f(_bv)],
@@ -1646,8 +1649,8 @@ for ti, res in enumerate(M["constructs"]):
                                   ["q (categories)",str(bp_r.get("q","—"))],
                                   ["SE",_f(_bse)],["z",_f(_bz)],
                                   ["p (2-tailed)",_p(_bpp) if not np.isnan(_bpp) else "—"],
-                                  ["95% CI (z-basis)",_bci_z],
-                                  ["95% CI (t-basis, df="+str(bp_r.get("ci_df","—"))+")",_bci_t],
+                                  [f"{_cl} CI (z-basis)",_bci_z],
+                                  [f"{_cl} CI (t-basis, df="+str(bp_r.get("ci_df","—"))+")",_bci_t],
                                   ["N (units)",str(n_units)],
                                   ["Interpretation",_blbl]]
                             st.markdown(html_tbl(rows,left_cols={0}),unsafe_allow_html=True)
@@ -1723,15 +1726,15 @@ for ti, res in enumerate(M["constructs"]):
                                     unsafe_allow_html=True)
                                 c1,c2,c3=st.columns(3)
                                 c1.metric(f"Gwet's AC2 ({_sk})",_f(_a2v))
-                                c2.metric("95% CI (z-basis)",_a2ci_z)
+                                c2.metric(f"{_cl} CI (z-basis)",_a2ci_z)
                                 c3.metric("Interpretation",_a2lbl.split(" (")[0] if _a2lbl else "—")
                                 rows=[["Statistic","Value"],
                                       [f"Gwet's AC2 ({ac2.get('scheme_label','')})",_f(_a2v)],
                                       ["SE (jackknife)",_f(_a2se)],
                                       ["z",_f(_a2z)],
                                       ["p (2-tailed)",_p(_a2p) if not np.isnan(_a2p) else "—"],
-                                      ["95% CI (z-basis)",_a2ci_z],
-                                      ["95% CI (t-basis, df="+str(ac2.get("ci_df","—"))+")",_a2ci_t],
+                                      [f"{_cl} CI (z-basis)",_a2ci_z],
+                                      [f"{_cl} CI (t-basis, df="+str(ac2.get("ci_df","—"))+")",_a2ci_t],
                                       ["N (units)",str(n_units)],
                                       ["k (raters)",str(k_raters)],
                                       ["q (categories)",str(ac2.get("q","—"))],
@@ -1763,7 +1766,7 @@ for ti, res in enumerate(M["constructs"]):
                             except: _cci="—"
                             c1,c2,c3=st.columns(3)
                             c1.metric("Lin's CCC (ρ_c)",_f(_cv))
-                            c2.metric("95% CI (Fisher z)",_cci)
+                            c2.metric(f"{_cl} CI (Fisher z)",_cci)
                             c3.metric("Interpretation",_clbl.split(" (")[0] if _clbl else "—")
                             rows=[["Statistic","Value","Interpretation"],
                                   ["CCC (ρ_c) — overall concordance",_f(_cv),_clbl],
@@ -1782,7 +1785,7 @@ for ti, res in enumerate(M["constructs"]):
                                    "Mean gap relative to pooled scale"],
                                   ["Scale shift (v)",_f(ccc_r.get("v_shift",np.nan)),
                                    "Ratio of the two SDs"],
-                                  ["95% CI (Fisher z-transform)",_cci,""],
+                                  [f"{_cl} CI (Fisher z-transform)",_cci,""],
                                   ["N (units)",str(n_units),""],
                                   ["CCC ≤ Pearson r",
                                    "Always true" if not (np.isnan(_cv) or np.isnan(_crho)) and _cv<=_crho else "—",
@@ -1828,7 +1831,7 @@ for ti, res in enumerate(M["constructs"]):
                             except Exception: pass
                             st.markdown(f'<p class="note-txt">{ccc_r.get("formula_note","")}</p>',unsafe_allow_html=True)
                             st.markdown(
-                                '<p class="note-txt"><b>95% CI methodology:</b> Fisher-Z transformation '
+                                f'<p class="note-txt"><b>{_cl} CI methodology:</b> Fisher-Z transformation '
                                 'using the FULL large-sample variance formula from Lin (1989, Biometrics '
                                 '45:255\u2013268; see also Lin, Hedayat, Sinha &amp; Yang, 2002, JASA '
                                 '97(457):257\u2013270) \u2014 this accounts for both precision (r) AND the '
