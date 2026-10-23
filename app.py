@@ -157,9 +157,11 @@ def _render_usage_guide():
                 "each row is one **unit** being rated (an essay, a "
                 "response, a case). All raters must score the same set "
                 "of units.\n"
-                "- Missing cells are allowed; rows/units with fewer than "
-                "two valid ratings are excluded automatically from the "
-                "coefficients that need a complete pair."
+                "- Missing cells are allowed. In the Inter-Rater Agreement "
+                "module, Krippendorff's alpha uses every unit rated by at "
+                "least two raters; every other coefficient uses only the "
+                "units rated by all selected raters (listwise deletion "
+                "within the rating group)."
             )
         with st.expander("⚙️  2. Configure the analysis"):
             st.markdown(
