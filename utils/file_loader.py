@@ -230,7 +230,8 @@ def validate_file(df, min_rows=3):
         warnings.append(
             f"The dataset contains missing values "
             f"({missing_pct:.1f}% of all cells). "
-            "Missing values will be excluded listwise during analysis."
+            "Each module's Notes tab states how missing values are handled "
+            "by each coefficient."
         )
 
     dup_rows = df.duplicated().sum()
