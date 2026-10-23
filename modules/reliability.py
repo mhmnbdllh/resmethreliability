@@ -1,38 +1,24 @@
 """
 modules/reliability.py
 ======================
-Reliability analysis engine for "Inferential Statistics by MA".
+Computation engine of the Reliability Toolkit (this repository), used by
+both of its pages:
 
-Computes internal-consistency reliability for one or more constructs (item
-sets) defined within a single uploaded file. For each construct it returns
-publication-grade output with extended diagnostics, automatic descriptive
-interpretation, and full methodological transparency.
+  * Inter-Rater Agreement (ResMeth-IRA; views/interrateragreement.py) --
+    run_multi_irar(): Percentage Agreement, Cohen's kappa (unweighted,
+    linear, quadratic), Fleiss' kappa, Scott's pi, the Brennan-Prediger
+    coefficient, Gwet's AC1 and AC2 (five weighting schemes), the
+    intraclass correlation coefficient (six forms), Lin's concordance
+    correlation coefficient, and Krippendorff's alpha (nominal, ordinal,
+    interval, ratio), each computed only for the data types and rater
+    counts for which it is defined (_get_applicable_methods).
 
-Coefficients
-------------
-  - Cronbach's alpha (+ 95% CI, + standardised alpha)
-  - Cronbach's alpha if item deleted, corrected item-total correlation,
-    squared multiple correlation, scale mean/variance if item deleted
-  - KR-20 (Kuder-Richardson) for dichotomous items (auto-detected)
-  - Split-half: Spearman-Brown (equal length) and Guttman split-half
-  - Guttman's lambda lambda1 .. lambda6
-  - Intraclass Correlation Coefficient (ICC1, ICC2, ICC3, single & average)
-  - Inter-item correlation / covariance matrices, average inter-item r
-  - McDonald's omega (single-factor congeneric model)
-  - Scale descriptive statistics
+  * Internal Consistency (views/internalconsistency.py) --
+    run_multi_reliability(): Cronbach's alpha, KR-20/KR-21, split-half,
+    Guttman's lambda1-6, McDonald's omega, ICC(C,k), item statistics.
 
-Reverse-item handling
----------------------
-  Items with a negative corrected item-total correlation are flagged. Optional
-  reversal (off by default) supports three transparent methods:
-    theoretical : new = (scale_min + scale_max) - x
-    observed    : new = (min_observed + max_observed) - x
-    zscore      : new = -zscore(x)
-
-References
-----------
-  Cronbach (1951); Kuder & Richardson (1937); Guttman (1945);
-  McDonald (1999); Shrout & Fleiss (1979); Field (2018); Cortina (1993).
+Every formula is documented, with its primary source, in the docstring of
+the function that implements it.
 """
 
 import itertools
@@ -132,260 +118,123 @@ def _detect_data_type(vals):
     return "nominal"
 
 
+def _kripp_counts(X):
+    """Unit-by-value count matrix for Krippendorff's alpha.
+
+    X: (N_units x k_raters) array, NaN = missing. Returns (C, vals) where
+    vals are the distinct observed values (sorted) and C[u, c] is the number
+    of raters who assigned value vals[c] to unit u."""
+    X = np.asarray(X, dtype=float)
+    vals = np.unique(X[~np.isnan(X)])
+    C = np.stack([(X == v).sum(axis=1) for v in vals], axis=1).astype(float)
+    return C, vals
+
+
+def _kripp_alpha_from_counts(C, vals, data_type):
+    """Krippendorff's alpha from a unit-by-value count matrix, via the
+    coincidence matrix (Krippendorff, 2004, Ch. 11).
+
+    Only pairable units (>= 2 values) enter. Coincidences:
+        o_ck = sum_u [n_uc * n_uk - (c == k) * n_uc] / (m_u - 1),
+    n_c = sum_k o_ck (pairable values of category c), n = sum_c n_c, and
+        alpha = 1 - (n - 1) * sum o_ck d2_ck / sum n_c n_k d2_ck,
+    which is identical to 1 - D_o/D_e with
+        D_o = (1/n) sum_ck o_ck d2_ck,  D_e = sum_ck n_c n_k d2_ck / (n(n-1)).
+    Distance d2 by metric:
+        nominal  : 0 if c == k else 1
+        ordinal  : (sum_{g=c..k} n_g - (n_c + n_k)/2)^2   (n_g from pairable values)
+        interval : (c - k)^2
+        ratio    : ((c - k)/(c + k))^2
+    Returns NaN when there are no pairable units or no expected
+    disagreement (all pairable values identical)."""
+    m = C.sum(axis=1)
+    keep = m >= 2
+    C, m = C[keep], m[keep]
+    if C.shape[0] == 0:
+        return np.nan
+    w = 1.0 / (m - 1.0)
+    O = np.einsum("u,ui,uj->ij", w, C, C) - np.diag((w[:, None] * C).sum(axis=0))
+    nc = O.sum(axis=1)
+    n = nc.sum()
+    if data_type == "nominal":
+        d2 = 1.0 - np.eye(len(vals))
+    elif data_type == "interval":
+        d2 = (vals[:, None] - vals[None, :]) ** 2
+    elif data_type == "ratio":
+        tot = vals[:, None] + vals[None, :]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            d2 = np.where(tot == 0, 0.0, ((vals[:, None] - vals[None, :]) / tot) ** 2)
+    else:  # ordinal
+        cs = np.concatenate([[0.0], np.cumsum(nc)])
+        i = np.arange(len(vals))
+        lo = np.minimum(i[:, None], i[None, :])
+        hi = np.maximum(i[:, None], i[None, :])
+        d2 = (cs[hi + 1] - cs[lo] - (nc[:, None] + nc[None, :]) / 2.0) ** 2
+        np.fill_diagonal(d2, 0.0)
+    de = float((np.outer(nc, nc) * d2).sum())
+    if de <= 1e-12:
+        return np.nan
+    return float(1.0 - (n - 1.0) * float((O * d2).sum()) / de)
+
+
 def _krippendorff_alpha(X, data_type="nominal", n_boot=200, alpha=0.05):
-    """Krippendorff's Alpha for any number of raters and any data type.
+    """Krippendorff's alpha for any number of raters and any data type,
+    with missing ratings allowed.
 
-    X: (N_units × k_raters) array, NaN = missing
+    X: (N_units x k_raters) array, NaN = missing
     data_type: 'nominal' | 'ordinal' | 'interval' | 'ratio'
-    n_boot: number of bootstrap resamples for 95% CI (0 = skip CI)
+    n_boot: number of bootstrap resamples for the (1 - alpha) CI (0 = skip CI)
 
-    Formula (Krippendorff, 2004):
-        α = 1 − D_o / D_e
-    where:
-        D_o = observed disagreement (mean pairwise distance within pairable units)
-        D_e = expected disagreement (mean pairwise distance across pairable values)
+    Point estimate: alpha = 1 - D_o/D_e computed through the coincidence
+    matrix of pairable values (values from units rated by >= 2 raters);
+    see _kripp_alpha_from_counts for the formulas and distance metrics
+    (Krippendorff, K. (2004). Content Analysis: An Introduction to Its
+    Methodology, 2nd ed., Sage, Ch. 11). Verified equal, to within
+    floating-point precision, to the independent `krippendorff` package
+    for all four metrics, with and without missing data.
 
-    CRITICAL — pairable values:
-        D_e must be computed from PAIRABLE values only — i.e., values from units
-        where ≥2 raters provided valid ratings. Including values from non-pairable
-        units (only 1 valid rater) inflates D_e and produces incorrect α, potentially
-        reversing its sign. This matches the coincidence-matrix formulation in
-        Krippendorff (2004) and is verified against the krippendorff Python package.
+    Confidence interval: percentile bootstrap over UNITS -- pairable units
+    are resampled with replacement (each unit keeps all of its ratings),
+    alpha is recomputed on every resample, and the alpha/2 and 1-alpha/2
+    percentiles of the resampled values are reported (Efron, B., &
+    Tibshirani, R.J. (1993). An Introduction to the Bootstrap. Chapman &
+    Hall; the same unit-level bootstrap evaluated for alpha by Zapf, A.,
+    Castell, S., Morawietz, L., & Karch, A. (2016). BMC Medical Research
+    Methodology, 16, 93). Fixed seed (42) for reproducibility.
 
-    Distance metrics (Krippendorff, 2004, Ch. 11):
-        nominal:  d(v_k, v_l) = 0 if v_k==v_l else 1
-        ordinal:  d(v_k, v_l) = (Σ_{g=v_k}^{v_l} n_g − (n_vk + n_vl)/2)²
-                  using marginal frequencies from pairable values only
-        interval: d(v_k, v_l) = (v_k − v_l)²
-        ratio:    d(v_k, v_l) = ((v_k − v_l)/(v_k + v_l))²
-
-    D_e computation:
-        nominal/interval/ratio: vectorized matrix operations (fast)
-        ordinal: pure-Python loop (freq-weighted cumulative sum required)
-
-    Bootstrap CI: percentile bootstrap; n_boot=0 disables CI.
-    For ordinal data with large N×k, use n_boot ≤ 400 to avoid long runtimes.
-
-    References:
-        Krippendorff, K. (2004). Content Analysis (2nd ed.). Sage.
-        Krippendorff, K. (2016). Bootstrapping Distributions for
-            Krippendorff's Alpha for coding predefined units: single-valued
-            cα and multi-valued mvα.
-            https://www.afhayes.com/public/alphaboot.pdf
-            (bootstrap CI algorithm; see inline comments below for the
-            step-by-step correspondence to this application's code)
+    CORRECTION (2026-10-23): this function previously used the pair-pool
+    bootstrap described by Krippendorff (2016, "Bootstrapping distributions
+    for Krippendorff's alpha"), which resamples individual pairs of values
+    as if they were independent. A data-based Monte Carlo check (1,000
+    resamples of each bundled sample dataset, 200 bootstrap draws each)
+    found that interval's coverage of the population alpha close to
+    nominal with two raters (0.926-0.951) but far below nominal with four
+    raters per unit (0.697 nominal, 0.775 ordinal, 0.766 interval), because
+    the C(k,2) pairs within a unit are not independent. The unit-level
+    bootstrap above gave coverage of 0.930-0.946 in the same check
+    (1,000 bootstrap draws).
     """
     try:
-        X = np.array(X, dtype=float)
-        n_units, k_raters = X.shape
-
-        # ── Pairable values: only from units with ≥2 valid raters ────────
-        pairable_vals = []
-        for i in range(n_units):
-            row = X[i, :]; vr = row[~np.isnan(row)]
-            if len(vr) >= 2:
-                pairable_vals.extend(vr.tolist())
-        pairable_vals = np.array(pairable_vals, dtype=float)
-        if len(pairable_vals) < 2:
+        C, vals = _kripp_counts(X)
+        if len(vals) == 0:
             return np.nan, (np.nan, np.nan)
-
-        unique_vals = np.sort(np.unique(pairable_vals))
-
-        # ── Distance function ─────────────────────────────────────────────
-        if data_type == "nominal":
-            def dist(a, b): return 0.0 if a == b else 1.0
-        elif data_type == "ordinal":
-            # Ordinal metric uses marginal frequencies from pairable values only
-            freq = {v: int(np.sum(pairable_vals == v)) for v in unique_vals}
-            def dist(a, b):
-                if a == b: return 0.0
-                lo, hi = (a, b) if a < b else (b, a)
-                vir = unique_vals[(unique_vals >= lo) & (unique_vals <= hi)]
-                s   = sum(freq.get(v, 0) for v in vir)
-                return (s - (freq.get(a, 0) + freq.get(b, 0)) / 2) ** 2
-        elif data_type == "ratio":
-            def dist(a, b):
-                if a + b == 0: return 0.0
-                return ((a - b) / (a + b)) ** 2
-        else:  # interval
-            def dist(a, b): return (a - b) ** 2
-
-        # ── Observed disagreement D_o ─────────────────────────────────────
-        # Krippendorff (2004) coincidence-matrix formulation:
-        # each unit u with μ_u valid raters contributes pairs with weight
-        # 1/(μ_u − 1). This ensures units with more raters do not dominate
-        # the observed disagreement estimate.
-        #
-        # Formula: D_o = Σ_u [2/(μ_u−1) · Σ_{j<l} δ(v_uj, v_ul)] / Σ_u μ_u
-        #
-        # For complete data (all μ_u = k): weights are equal and this reduces
-        # to the simple mean, so NO change for users without missing data.
-        # For missing data (varying μ_u): weights differ — this correction
-        # is essential for correctness.
-        #
-        # Reference: Krippendorff, K. (2004). Content Analysis: An Introduction
-        # to Its Methodology (2nd ed.). Sage. Chapter 11.
-        d_o_num = 0.0
-        d_o_den = 0.0   # accumulates Σ_u μ_u
-        for i in range(n_units):
-            row = X[i, :]; vr = row[~np.isnan(row)]; m = len(vr)
-            if m < 2: continue
-            w = 2.0 / (m - 1)          # weight per pair for this unit
-            for ai in range(m):
-                for bi in range(ai + 1, m):
-                    d_o_num += w * dist(vr[ai], vr[bi])
-            d_o_den += float(m)         # μ_u contribution to denominator
-        D_o = d_o_num / d_o_den if d_o_den > 0 else np.nan
-
-        # ── Expected disagreement D_e (vectorized where possible) ─────────
-        pv = pairable_vals; n_pv = len(pv)
-        if data_type == "nominal":
-            # Vectorized: fraction of disagreeing pairs
-            D_e = float(np.sum(pv[:, None] != pv[None, :]) / (n_pv * (n_pv - 1)))
-        elif data_type == "interval":
-            diff = pv[:, None] - pv[None, :]
-            D_e  = float(np.sum(diff ** 2) / (n_pv * (n_pv - 1)))
-        elif data_type == "ratio":
-            a_m = pv[:, None]; b_m = pv[None, :]
-            denom = a_m + b_m
-            with np.errstate(invalid="ignore", divide="ignore"):
-                d_m = np.where(denom == 0, 0.0, ((a_m - b_m) / denom) ** 2)
-            D_e = float(np.sum(d_m) / (n_pv * (n_pv - 1)))
-        else:  # ordinal — must loop (freq-weighted cumulative sum)
-            d_e_sum = 0.0; n_exp_pairs = 0
-            for ai in range(n_pv):
-                for bi in range(ai + 1, n_pv):
-                    d_e_sum += dist(pv[ai], pv[bi]); n_exp_pairs += 1
-            D_e = d_e_sum / n_exp_pairs if n_exp_pairs > 0 else np.nan
-
-        if np.isnan(D_o) or np.isnan(D_e) or D_e < 1e-12:
+        C = C[C.sum(axis=1) >= 2]          # pairable units only
+        if C.shape[0] < 1:
             return np.nan, (np.nan, np.nan)
-
-        alpha_val = float(1.0 - D_o / D_e)
-
-        # ── Bootstrap CI ──────────────────────────────────────────────────
-        if n_boot == 0:
+        alpha_val = _kripp_alpha_from_counts(C, vals, data_type)
+        if np.isnan(alpha_val) or n_boot == 0 or C.shape[0] < 2:
             return alpha_val, (np.nan, np.nan)
-
-        # ── Bootstrap CI — pair-pool algorithm ────────────────────────────
-        # Algorithm (from the primary theoretical source, read directly):
-        #   Krippendorff, K. (2016). Bootstrapping Distributions for
-        #   Krippendorff's Alpha for coding predefined units: single-valued
-        #   cα and multi-valued mvα. https://www.afhayes.com/public/alphaboot.pdf
-        #   (originally posted 2006.08.16, revised 2016.08.06). Per that paper,
-        #   this algorithm "will be implemented in the revised software KALPHA
-        #   (Hayes & Krippendorff, 2007)".
-        #
-        # 1. Build a flat pool er[] of every within-unit pairwise delta,
-        #    across the ENTIRE observed dataset (= the paper's E(r), r=1..No).
-        #    Length = nprs = Σ_u μ_u·(μ_u−1)/2.
-        # 2. Normalise each entry: er_norm[i] = 2·δᵢ / (D_e · Σμ)
-        #    where D_e is computed ONCE from the full observed data and
-        #    held fixed for all bootstrap replications (the paper's De).
-        # 3. Bootstrap loop: start α = 1.0 (the paper's "α = 1"). For each
-        #    unit u (fixed structure — no row resampling), draw
-        #    μ_u·(μ_u−1)/2 random indices into er_norm (with replacement,
-        #    global pool of No entries) and subtract er_norm[r] / (μ_u−1)
-        #    per draw. Redraw rule (paper: "If the 2nd pick yields
-        #    Pair(r_2nd) = Pair(r_1st), pick a random integer..."): on the
-        #    2nd draw within a unit only, if the underlying pair of RATED
-        #    VALUES this draw points to (er_pairs[r], not the raw pool
-        #    index r itself) is identical to the pair the 1st draw pointed
-        #    to, redraw once. Two different pool positions can hold the
-        #    same rated-value pair whenever that pair recurs elsewhere in
-        #    the dataset, so this is a materially different — and, per the
-        #    cited source, correct — condition from comparing pool indices.
-        # 4. Floor at −1.0 (the paper's "If α < −1: n₋₁ ← n₋₁ + 1").
-        # 5. CI: sort n_boot replicates; read off the 2.5th/97.5th
-        #    percentiles (the paper's α_smallest / α_largest for p=0.05).
-        #
-        # This design differs from case/row-level resampling in that the
-        # unit structure is held fixed and only the ASSIGNMENT of pair-
-        # deltas to unit-slots is randomised.
-        #
-        # Tolerance: bootstrap CIs will not match KALPHA digit-for-digit
-        # (both are independent Monte Carlo draws with different PRNG
-        # implementations, and the cited paper's own default resample
-        # count, X=20,000, exceeds the 200–1,000 range this application
-        # offers — Uncertainty Estimation in the accompanying manuscript
-        # documents the reasoning for that bound). CI bounds within
-        # ~0.02–0.03 of KALPHA's bounds, and CI widths of comparable
-        # magnitude, are the realistic target.
-        #
-        # Validation status: D_o/D_e computation (the non-bootstrap part of
-        # this function) was cross-validated against the independent
-        # `krippendorff` Python package across all four distance metrics,
-        # with and without missing data (see project test suite), and the
-        # point estimate has separately matched SPSS 26's KALPHA macro
-        # exactly across all four measurement levels on real external
-        # validation data. The bootstrap redraw condition above was
-        # corrected (2026) to compare rated-value-pair identity rather
-        # than pool-index identity, per direct reading of the cited
-        # primary source; it has not been benchmarked digit-for-digit
-        # against KALPHA's own internal SAS/SPSS source (unpublished),
-        # only against the theoretical algorithm the cited paper documents
-        # and against KALPHA's own numerical *output* on real data (see
-        # accompanying manuscript, Method Validation).
-
-        # Build er pool. er_pairs[r] stores the canonical (order-independent)
-        # identity of the two rated values that produced er[r] — i.e. Pair(r)
-        # in Krippendorff (2016, https://www.afhayes.com/public/alphaboot.pdf,
-        # "Bootstrapping Distributions for Krippendorff's Alpha"), needed for
-        # the redraw condition below (Pair(r) is the compared-VALUES identity,
-        # not the pool array position).
-        er = []
-        er_pairs = []
-        mu_units = []
-        for _u in range(n_units):
-            _row = X[_u, :]; _vr = _row[~np.isnan(_row)]; _m = len(_vr)
-            if _m < 2: continue
-            mu_units.append(_m)
-            for _ai in range(_m):
-                for _bi in range(_ai + 1, _m):
-                    er.append(dist(_vr[_ai], _vr[_bi]))
-                    _a_val, _b_val = _vr[_ai], _vr[_bi]
-                    er_pairs.append((_a_val, _b_val) if _a_val <= _b_val else (_b_val, _a_val))
-        er     = np.asarray(er, dtype=float)
-        nprs   = len(er)
-        sum_mu = float(sum(mu_units))
-        if nprs < 1 or D_e < 1e-12:
-            return alpha_val, (np.nan, np.nan)
-        er_norm = (2.0 * er) / (D_e * sum_mu)
-
-        # Bootstrap (Krippendorff, 2016, alphaboot.pdf, Algorithm section)
         rng = np.random.default_rng(42)
-        boot_alphas = np.empty(n_boot)
-        for _z in range(n_boot):
-            _a = 1.0
-            for _u, _mu_u in enumerate(mu_units):
-                _muloop = int(_mu_u * (_mu_u - 1) / 2)
-                _rch_first = -1
-                for _ppp in range(1, _muloop + 1):
-                    _rch = int(rng.integers(0, nprs))
-                    # Redraw when the 2nd pick yields Pair(r_2nd) = Pair(r_1st)
-                    # — the SAME underlying rated-value pair as the 1st pick,
-                    # not merely the same pool index (Krippendorff, 2016).
-                    if _ppp == 2 and er_pairs[_rch] == er_pairs[_rch_first]:
-                        _rch = int(rng.integers(0, nprs))
-                    _rch_first = _rch
-                    _a -= er_norm[_rch] / (_mu_u - 1)
-            boot_alphas[_z] = max(_a, -1.0)
-
-        boot_sorted = np.sort(boot_alphas)
-        # BUG FIX (2026-10-21): percentile indices were hardcoded to
-        # 0.025/0.975 (always the 95% interval) regardless of the alpha
-        # the user selected -- this function did not even accept an
-        # `alpha` parameter before this fix.
-        _lo_idx = int((alpha / 2) * n_boot)
-        _hi_idx = int((1 - alpha / 2) * n_boot)
-        ci_lo = float(boot_sorted[_lo_idx])
-        ci_hi = float(boot_sorted[_hi_idx])
-        return alpha_val, (ci_lo, ci_hi)
-
+        n_u = C.shape[0]
+        reps = np.array([_kripp_alpha_from_counts(C[rng.integers(0, n_u, n_u)], vals, data_type)
+                         for _ in range(n_boot)])
+        reps = reps[~np.isnan(reps)]
+        if len(reps) < max(20, n_boot // 2):
+            return alpha_val, (np.nan, np.nan)
+        ci_lo, ci_hi = np.percentile(reps, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+        return alpha_val, (float(ci_lo), float(ci_hi))
     except Exception:
         return np.nan, (np.nan, np.nan)
-
-
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -405,7 +254,7 @@ def _percentage_agreement(X, alpha=0.05):
     with partial missingness still contribute a valid per-unit value
     based on however many pairs they do have).
 
-    95% CI: unit-level one-sample t-interval on the N per-unit PA_i
+    (1 - alpha) CI: unit-level one-sample t-interval on the N per-unit PA_i
     values (NOT a pair-level Wald interval -- see the CI CORRECTION
     comment in the function body for the Monte Carlo evidence, 85.1%
     vs. 94.2% empirical coverage, motivating this).
@@ -513,66 +362,13 @@ def _dual_ci(estimate, se, n, alpha=0.05):
     therefore the form that follows directly from the SE formula's own
     theoretical origin, not an arbitrary default.
 
-    CORRECTION (2026-10-21) -- citation for the "analytic" case (Scott's
-    pi, Brennan-Prediger) was wrong and has been fixed here and in
-    _dual_ci_note(): this docstring previously named Fleiss, J.L.,
-    Cohen, J., & Everitt, B.S. (1969) as "the primary derivation" of
-    the SE formula BOTH these coefficients actually use
-    (se = sqrt(Po(1-Po) / (N(1-Pe)^2)), with each coefficient's own Pe
-    definition). That attribution is wrong for both. The Fleiss-Cohen-
-    Everitt (1969) paper derives a different, more complex variance (the
-    one this module's OWN _cohen_kappa() implements verbatim as its
-    Equations 8/9 -- see that function). The simpler formula actually
-    used here for both coefficients is Cohen, J. (1960)'s original
-    large-sample approximation for kappa's SE (A coefficient of
-    agreement for nominal scales. Educational and Psychological
-    Measurement, 20(1), 37-46), confirmed via an independent secondary
-    source (NCSS/PASS "Confidence Intervals for Kappa" documentation,
-    which attributes se = sqrt[Po(1-Po)/(1-Pe)^2] explicitly to "Cohen's
-    (1960) simpler approximation," built on "faulty assumptions" the
-    more complex Fleiss et al. (1969) formula was specifically designed
-    to correct).
-
-    IMPORTANT: the citation error is shared by both coefficients, but
-    the ACCURACY consequence is NOT -- independently re-verified
-    separately for each (not assumed to generalize from one to the
-    other):
-    - Scott's pi: Pe is ESTIMATED from the sample's own marginals, so
-      Cohen's (1960) "Pe fixed" assumption is only approximate here.
-      Three Monte Carlo setups -- (a) 3-category nominal, independent
-      raters; (b) dichotomous at this app's real sample prevalence,
-      independent raters; (c) dichotomous resampled from the REAL joint
-      distribution of sample-resmeth_Dichotomous.csv's R1/R2 (kappa~0.41)
-      -- each at N=86/200/500/1500, several thousand replicates: the
-      SE/true-SD ratio stayed roughly CONSTANT across N in every setup
-      (~1.06-1.08, ~1.37-1.40, ~1.01-1.06 respectively) -- NOT shrinking
-      toward 1.0. A persistent, non-vanishing ratio across increasing N
-      is the signature of a structural bias, not a valid converging
-      asymptotic estimator -- the opposite of what an earlier revision
-      of this module's own _scott_pi() docstring had claimed ("VERIFIED,
-      DEFINITIVE... convergence toward zero [bias] as N grows"), whose
-      specific numbers could not be reproduced under any of these three
-      independent setups and has been removed. See _scott_pi()'s own
-      docstring for this coefficient's full evidence.
-    - Brennan-Prediger: Pe=1/q is a genuinely FIXED design constant (the
-      declared category count), not an estimated quantity -- so Cohen's
-      (1960) "Pe fixed" assumption is EXACT here, not an approximation.
-      Re-verified the same way (real-data joint distribution at q=2, and
-      a separate 3-category nominal near-null case at q=3), the SE/true-
-      SD ratio converged closely to 1.0 at every N tested (0.98-1.01
-      range, no systematic drift with N) -- i.e. no comparable bias.
-      See _brennan_prediger()'s own docstring for this coefficient's
-      full evidence.
-
-    Net effect: the simpler Cohen (1960) formula is RETAINED for both
-    coefficients (a from-scratch re-derivation of Fleiss et al.'s more
-    complex delta-method variance was judged too large a change to make
-    and verify safely in this pass for Scott's pi, and is unnecessary for
-    Brennan-Prediger since its own formula is already accurate), but
-    Scott's pi's CI should now be read as a moderately conservative
-    (SE-overestimating, roughly 5-40% high) interval rather than a
-    precisely calibrated one, while Brennan-Prediger's CI has no such
-    caveat.
+    z-basis for the analytic case (Brennan-Prediger only): the SE is
+    Cohen's (1960) large-sample approximation sqrt(Po(1-Po)/(N(1-Pe)^2)),
+    Educational and Psychological Measurement, 20(1), 37-46. It treats Pe as
+    a fixed constant, which is exact for Brennan-Prediger because Pe = 1/q
+    is fixed by the declared number of categories. (Scott's pi no longer
+    uses this formula: its SEs now come from the Fleiss-kappa variance
+    literature -- see _scott_pi.)
 
     t-basis (df=n-1): a more conservative alternative. For
     jackknife-derived SEs (Gwet's AC1/AC2), this has independent,
@@ -582,19 +378,13 @@ def _dual_ci(estimate, se, n, alpha=0.05):
     Introduction to the Bootstrap. Chapman & Hall, Ch. 11 -- both of
     which discuss the "jackknife t-interval" as an established,
     conservative convention distinct from the plain jackknife variance
-    estimate. For all four coefficients using this dual-CI mechanism,
-    the t-basis is also the convention implemented in Stata's kappaetc
-    command as part of what its documentation describes as Gwet's own
-    (2014) statistical inference framework for these coefficients
+    estimate. The t-basis is also the convention of Gwet's (2014)
+    inference framework as implemented in Stata's kappaetc command
     (Klein, D., 2018. Implementing a general framework for assessing
-    interrater agreement in Stata. The Stata Journal, 18(4), 871-901;
-    Gwet, K.L., 2014. Handbook of Inter-Rater Reliability, 4th ed.,
-    Advanced Analytics, LLC). For the two analytically-derived-SE
-    coefficients (Scott's pi, Brennan-Prediger), this t-basis rests on
-    the Gwet/Klein source alone, without the additional independent
-    jackknife-literature support available for AC1/AC2 -- this
-    asymmetry in evidentiary strength is intentional and should not be
-    obscured when this note is surfaced to the user.
+    interrater agreement in Stata. The Stata Journal, 18(4), 871-901).
+    For Scott's pi (= Fleiss' kappa with two raters) it is the interval
+    Gwet (2021) evaluated for the general Fleiss-kappa variance. For
+    Brennan-Prediger it rests on the Gwet/Klein convention alone.
 
     Returns dict: ci_lo_z, ci_hi_z, ci_lo_t, ci_hi_t, df, z_critical,
     t_critical.
@@ -618,107 +408,81 @@ def _dual_ci(estimate, se, n, alpha=0.05):
 
 
 def _scott_pi(r1, r2, alpha=0.05):
-    """Scott's Pi (π) — inter-rater agreement for 2 raters, nominal/dichotomous.
+    """Scott's Pi (pi) -- inter-rater agreement for 2 raters, nominal/dichotomous.
 
-    Differs from Cohen's κ in how P_e is calculated:
-    - Cohen's κ: P_e = Σ p_i(r1) × p_i(r2)  [product of separate marginals]
-    - Scott's π: P_e = Σ ((p_i(r1) + p_i(r2))/2)²  [squared average marginals]
+    Point estimate (Scott, 1955):
+        pi = (P_o - P_e) / (1 - P_e),  P_e = sum_c ((p_c(r1) + p_c(r2)) / 2)^2,
+    i.e. chance agreement from the AVERAGED marginal proportions (Cohen's
+    kappa uses their product instead).
 
-    Formula (Scott, 1955):
-        π = (P_o − P_e_scott) / (1 − P_e_scott)
-    SE: var(π) = P_o(1−P_o) / (N × (1−P_e)²)
+    With two raters Scott's pi is identical to Fleiss' (1971) kappa, so its
+    standard errors are taken from the Fleiss-kappa variance literature:
+      se_null -- null-hypothesis SE of Fleiss, Nee & Landis (1979), used
+                 ONLY for z and the two-sided p-value of H0: pi = 0;
+      se      -- general-purpose (non-null) SE of Gwet (2021), Equations
+                 4 and 12, used for the confidence intervals (z-basis and
+                 t-basis with df = n - 1, the interval Gwet (2021)
+                 evaluated).
 
-    CORRECTION (2026-10-21) -- this docstring previously (a) mis-cited
-    this SE formula as "Fleiss et al. 1969-style," and (b) carried a
-    "VERIFIED, DEFINITIVE" claim that an independent Monte Carlo check
-    showed the SE/true-SD ratio converging monotonically to 1.0 as N
-    grows (1.0148 -> 1.0026 -> 0.9988 -> 0.9932), concluding the formula
-    was "verified-correct." Both were wrong and have been replaced with
-    the following, independently re-verified findings:
-
-    (a) Citation: this formula is Cohen, J. (1960)'s original large-
-    sample SE approximation for kappa-family coefficients (A coefficient
-    of agreement for nominal scales. Educational and Psychological
-    Measurement, 20(1), 37-46), adapted here to Scott's own P_e
-    definition -- NOT Fleiss, J.L., Cohen, J., & Everitt, B.S. (1969)'s
-    formula, which is a different, more complex expression (implemented
-    verbatim, for Cohen's kappa specifically, in this module's own
-    _cohen_kappa() as its Equations 8/9). Confirmed via an independent
-    secondary source (NCSS/PASS "Confidence Intervals for Kappa"
-    documentation), which attributes se = sqrt[Po(1-Po)/(1-Pe)^2]
-    explicitly to "Cohen's (1960) simpler approximation," built on
-    "faulty assumptions" relative to the more accurate Fleiss et al.
-    (1969) formula -- Fleiss, Cohen, & Everitt (1969) themselves
-    introduced their more complex variance specifically to correct this
-    simpler one's treatment of P_e as a fixed constant rather than a
-    second quantity with its own sampling variance.
-
-    (b) Accuracy, re-tested independently (not re-derived from the prior
-    claim's own numbers): three separate Monte Carlo setups, each at
-    N=86/200/500/1500 with several thousand replicates --
-      - 3-category nominal data, independent raters (Pe~uniform-ish):
-        SE/true-SD ratio ~1.06-1.08 at every N, not shrinking.
-      - Dichotomous data at this app's real sample prevalence (p=0.78),
-        independent raters: ratio ~1.37-1.40 at every N, not shrinking.
-      - Dichotomous data resampled from the REAL joint distribution of
-        sample-resmeth_Dichotomous.csv's R1/R2 columns (observed
-        kappa~0.41, a realistic non-null case): ratio ~1.01-1.06 at
-        every N, not shrinking.
-    None of the three reproduces the previously-claimed monotonic
-    convergence toward 1.0, and all three show the SAME signature this
-    module's own prior text correctly identified as diagnostic of a
-    genuine formula limitation ("a genuinely incorrect formula... does
-    not exhibit [a convergence] pattern -- its error persists or does
-    not shrink toward zero as N increases") -- consistent with (a)'s
-    finding that this is Cohen's (1960) known-approximate formula, not
-    an exact asymptotic one.
-
-    Net effect: the formula is RETAINED (replacing it with a correctly
-    re-derived Fleiss et al. (1969)-style variance specific to Scott's
-    own P_e definition was judged too large a change to make and verify
-    safely in this pass), but is now documented as a moderately
-    conservative (SE running ~5-40% high, scenario-dependent) large-
-    sample approximation rather than a verified-exact one. The resulting
-    CI (see _dual_ci()/_dual_ci_note()) should be read as a somewhat
-    wide, conservative interval, not a precisely calibrated one.
+    CORRECTION (2026-10-23): this function previously used Cohen's (1960)
+    approximation sqrt(P_o(1 - P_o) / (n(1 - P_e)^2)), which treats P_e as a
+    fixed constant. For Scott's pi P_e is estimated from the data, and a
+    Monte Carlo check with independent raters showed that SE exceeding the
+    true sampling SD by a factor that grows with prevalence skew (about 1.0
+    at a 50/50 split, 1.3 at 75/25, 1.7 at 85/15 and 2.2 at 90/10), i.e.
+    the intervals were too wide. The replacement SE agrees with the irrCAC
+    package's Fleiss-kappa SE for two raters.
 
     References:
-    - Scott, W. A. (1955). Reliability of content analysis: The case of
-      nominal scale coding. Public Opinion Quarterly, 19(3), 321–325.
-    - Cohen, J. (1960). A coefficient of agreement for nominal scales.
-      Educational and Psychological Measurement, 20(1), 37–46.
+    - Scott, W. A. (1955). Public Opinion Quarterly, 19(3), 321-325.
+    - Fleiss, J. L. (1971). Psychological Bulletin, 76(5), 378-382.
+    - Fleiss, J. L., Nee, J. C. M., & Landis, J. R. (1979). Psychological
+      Bulletin, 86(5), 974-977.
+    - Gwet, K. L. (2021). Educational and Psychological Measurement,
+      81(4), 781-790.
     """
     r1 = np.asarray(r1, dtype=float)
     r2 = np.asarray(r2, dtype=float)
     mask = ~(np.isnan(r1) | np.isnan(r2))
     r1, r2 = r1[mask], r2[mask]
     n = len(r1)
+    empty = {"pi": np.nan, "se": np.nan, "se_null": np.nan, "z": np.nan,
+             "p": np.nan, "ci_lo_z": np.nan, "ci_hi_z": np.nan,
+             "ci_lo_t": np.nan, "ci_hi_t": np.nan, "ci_df": max(n - 1, 0),
+             "Po": np.nan, "Pe": np.nan, "n": n, "label": "N/A"}
     if n < 2:
-        return {"pi": np.nan, "se": np.nan, "z": np.nan,
-                "p": np.nan, "ci_lo": np.nan, "ci_hi": np.nan,
-                "n": n, "label": "N/A"}
+        return empty
     cats = np.union1d(r1, r2)
-    Po = float(np.mean(r1 == r2))
-    # Scott's Pe: averaged marginal proportions squared
-    Pe = float(np.sum([((np.sum(r1==c)/n + np.sum(r2==c)/n)/2)**2 for c in cats]))
+    # unit-by-category counts (each unit has exactly 2 ratings)
+    table = np.stack([(r1 == c).astype(float) + (r2 == c).astype(float) for c in cats], axis=1)
+    p_j = table.sum(axis=0) / (2.0 * n)            # averaged marginal proportions
+    P_i = (table * (table - 1)).sum(axis=1) / 2.0  # 1 if the two ratings agree, else 0
+    Po = float(P_i.mean())
+    Pe = float(np.sum(p_j ** 2))
     if abs(1 - Pe) < 1e-12:
-        return {"pi": np.nan, "se": np.nan, "z": np.nan,
-                "p": np.nan, "ci_lo": np.nan, "ci_hi": np.nan,
-                "n": n, "label": "N/A"}
+        return dict(empty, Po=Po, Pe=Pe)
     pi_val = (Po - Pe) / (1 - Pe)
-    se     = float(np.sqrt(Po*(1-Po) / (n * (1-Pe)**2))) if n > 0 else np.nan
-    z      = pi_val / se if (se > 1e-12) else np.nan
-    p      = float(2 * scipy_stats.norm.sf(abs(z))) if not np.isnan(z) else np.nan
-    _dual  = _dual_ci(pi_val, se, n, alpha)
-    return {"pi":    pi_val,
-            "se":    se if not np.isnan(se) else np.nan,
-            "z":     z if not np.isnan(z) else np.nan,
-            # Not rounded here -- see note on kappa_p in _cohen_kappa()
-            # for rationale (preserve precision for genuinely tiny p).
-            "p":     p if not np.isnan(p) else np.nan,
+    # Null-hypothesis SE (Fleiss, Nee & Landis, 1979) with k = 2 raters
+    S1 = float(np.sum(p_j * (1 - p_j)))
+    S2 = float(np.sum(p_j * (1 - p_j) * (1 - 2 * p_j)))
+    var0 = (2.0 / (n * 2 * 1 * max(S1 ** 2, 1e-12))) * (S1 ** 2 - S2)
+    se_null = float(np.sqrt(max(var0, 0.0)))
+    # General-purpose SE (Gwet, 2021): linearised unit contributions
+    pe_i = (table * p_j[None, :]).sum(axis=1) / 2.0
+    kap_i = (P_i - Pe) / (1 - Pe)
+    kap_star = kap_i - 2 * (1 - pi_val) * (pe_i - Pe) / (1 - Pe)
+    se = float(np.sqrt(np.sum((kap_star - pi_val) ** 2) / (n * (n - 1))))
+    z = pi_val / se_null if se_null > 1e-12 else np.nan
+    p = float(2 * scipy_stats.norm.sf(abs(z))) if not np.isnan(z) else np.nan
+    _dual = _dual_ci(pi_val, se, n, alpha)
+    return {"pi":      pi_val,
+            "se":      se,
+            "se_null": se_null,
+            "z":       z if not np.isnan(z) else np.nan,
+            "p":       p if not np.isnan(p) else np.nan,
             "ci_lo_z": _dual["ci_lo_z"], "ci_hi_z": _dual["ci_hi_z"],
             "ci_lo_t": _dual["ci_lo_t"], "ci_hi_t": _dual["ci_hi_t"],
-            "ci_df": _dual["df"],
+            "ci_df":   _dual["df"],
             "Po": Po, "Pe": Pe,
             "n": n, "label": kappa_label(pi_val)}
 
@@ -726,9 +490,13 @@ def _scott_pi(r1, r2, alpha=0.05):
 def _brennan_prediger(r1, r2, alpha=0.05, q_declared=None):
     """Brennan-Prediger Coefficient (κ_BP).
 
-    Assumes equal category distribution (P_e = 1/q), the most conservative
-    expected agreement. More appropriate than Cohen's κ when category
-    prevalence is unequal.
+    Chance agreement is fixed at P_e = 1/q, the agreement expected if
+    raters assigned the q declared categories uniformly at random. P_e
+    therefore does not depend on the observed marginal distributions.
+    Note: 1/q is the SMALLEST chance term of the Scott/Fleiss type
+    (sum_c p_c^2 >= 1/q), so kappa_BP >= Scott's pi for the same data; it
+    is not a lower bound on agreement. (An earlier revision described it as
+    "the most conservative" estimate, which was wrong.)
 
     Formula (Brennan & Prediger, 1981):
         κ_BP = (P_o − 1/q) / (1 − 1/q)
@@ -745,13 +513,9 @@ def _brennan_prediger(r1, r2, alpha=0.05, q_declared=None):
     Fleiss, Cohen, & Everitt (1969) instead (now corrected -- see
     _dual_ci()'s own docstring for the full citation-correction note).
 
-    Unlike that same formula applied to Scott's pi (where Pe is
-    ESTIMATED from the sample and Cohen's "Pe fixed" assumption is only
-    approximate -- see _scott_pi()'s docstring for a documented,
-    non-vanishing SE bias), here Pe=1/q is a genuinely FIXED design
-    constant: the declared category count, not a quantity estimated
-    from the data. Cohen's (1960) assumption is therefore EXACT for this
-    coefficient, not an approximation. Independently re-verified by
+    Pe = 1/q is a FIXED design constant (the declared category count), not
+    a quantity estimated from the data, so Cohen's (1960) fixed-Pe
+    assumption holds exactly for this coefficient. Independently re-verified by
     direct Monte Carlo (not assumed to transfer from Scott's pi's
     result): (a) resampling from sample-resmeth_Dichotomous.csv's real
     R1/R2 joint distribution, q=2, N=86/200/500/1500, 10,000 replicates
@@ -936,7 +700,7 @@ def _gwet_ac1(X, alpha=0.05, q_declared=None):
 
     For k=2: P_o = proportion of matching pairs.
     For k≥2: P_o = (1/(N×k×(k-1)/2)) × Σ_i Σ_{j<l} I(X_ij == X_il)
-    Variance: jackknife (Gwet, 2014, Appendix A).
+    Variance: delete-one-unit jackknife (Efron & Tibshirani, 1993, Ch. 11).
 
     q -- THEORETICAL BASIS (verified directly against the primary source):
     Gwet, Handbook of Inter-Rater Reliability (4th ed., 2014), Advanced
@@ -1036,40 +800,28 @@ def _gwet_ac1(X, alpha=0.05, q_declared=None):
             "label":  kappa_label(ac1_full) if not np.isnan(ac1_full) else "N/A"}
 
 
-def _build_ac2_weight_matrix(cats, q, weights, scale_min=None, X_flat_valid=None):
-    """Builds the q_obs x q_obs weight matrix for Gwet's AC2, over the
-    OBSERVED category set 'cats' (structural size), normalized using the
-    (possibly declared, not merely observed) q (see _gwet_ac2 docstring).
+def _build_ac2_weight_matrix(cats, q, weights, scale_min=None):
+    """Builds the q x q weight matrix for Gwet's AC2 over the FULL declared
+    category range [lo, lo+q-1] (see the IMPORTANT note below).
 
-    Five weighting schemes, each formula independently verified against a
-    primary or authoritative source (not assumed):
+    Five weighting schemes, all taken from the weight family defined in
+    Gwet, K.L. (2014). Handbook of Inter-Rater Reliability (4th ed.),
+    Advanced Analytics, LLC, and each checked numerically against the
+    weight functions of an independent implementation of that family
+    (the irrCAC package's Weights class):
 
       identity  -- w=1 if c=c' else 0. Reduces AC2 exactly to AC1.
-      linear    -- w = 1 - |c-c'|/(q-1). "Cicchetti-Allison" weights.
-        Primary source: Cicchetti, D., & Allison, T. (1971). A new
-        procedure for assessing reliability of scoring EEG sleep
-        recordings. American Journal of EEG Technology, 11, 101-109.
-      quadratic -- w = 1 - (c-c')^2/(q-1)^2. "Fleiss-Cohen" weights
-        (default, matches this application's prior unnamed default).
-        Primary source: Fleiss, J.L., & Cohen, J. (1973). The equivalence
-        of weighted kappa and the intraclass correlation coefficient as
-        measures of reliability. Educational and Psychological
-        Measurement, 33(3), 613-619.
-      radical   -- w = 1 - sqrt(|c-c'|/(q-1)). Formula independently
-        verified by numerically reproducing R's irrCAC::radical.weights()
-        reference output (Gwet's own package): radical.weights(1:3) gives
-        w(1,2)=w(2,3)=0.2928932 = 1-sqrt(1/2), matching this formula
-        exactly.
-      ordinal   -- Krippendorff (2004)-style, frequency-based distance,
-        converted to a normalized similarity weight. UNLIKE the other four
-        schemes, this one depends on the empirical frequency distribution
-        of ratings, not solely on category values -- it is recomputed from
-        whatever categories and frequencies are supplied, using the same
-        cumulative-frequency formula documented in _krippendorff_alpha's
-        ordinal metric:
-            d(a,b) = (sum of n_g for g from a to b - (n_a+n_b)/2)^2
-        normalized by the maximum such distance across the declared range,
-        so that w=1 at zero distance and w=0 at the maximum.
+      linear    -- w = 1 - |c-c'|/(q-1) (Cicchetti & Allison, 1971).
+      quadratic -- w = 1 - (c-c')^2/(q-1)^2 (Fleiss & Cohen, 1973).
+      radical   -- w = 1 - sqrt(|c-c'|/(q-1)).
+      ordinal   -- rank-based ordinal weights: with n_cc' = |c-c'| + 1,
+        M_cc' = n_cc'(n_cc'-1)/2 (the number of category pairs spanned
+        between c and c'), w = 1 - M_cc'/max(M). Depends only on the
+        category positions, never on the observed rating frequencies.
+        (Corrected 2026-10-23: this scheme previously used a frequency-
+        based, Krippendorff-alpha-style distance, which is not one of the
+        weights defined for AC2 in Gwet (2014); replaced by the ordinal
+        weights that Gwet (2014) does define.)
 
     IMPORTANT (corrected in this revision): the weight matrix is built
     over the FULL DECLARED category range [lo, lo+q-1] -- q categories,
@@ -1109,27 +861,14 @@ def _build_ac2_weight_matrix(cats, q, weights, scale_min=None, X_flat_valid=None
                 W[i, j] = 1 - np.sqrt(abs(ci - cj) / (q - 1)) if q > 1 else 1.0
         return W
     if weights == "ordinal":
-        # Frequency-based (Krippendorff-style) weights: reconstruct
-        # frequencies over the FULL declared category range. Declared-
-        # but-unobserved categories correctly contribute 0 frequency,
-        # which the cumulative-sum formula handles natively (no special
-        # casing needed).
-        freq = {g: 0 for g in full_range}
-        if X_flat_valid is not None:
-            for v_ in X_flat_valid:
-                gv = int(v_)
-                if gv in freq:
-                    freq[gv] += 1
-        def _d2(a, b):
-            lo_, hi_ = (a, b) if a <= b else (b, a)
-            s = sum(freq.get(g, 0) for g in range(lo_, hi_ + 1))
-            return (s - (freq.get(a, 0) + freq.get(b, 0)) / 2.0) ** 2
-        max_d2 = _d2(full_range[0], full_range[-1]) if q > 1 else 1.0
-        max_d2 = max_d2 if max_d2 > 1e-12 else 1.0
-        for i, ci in enumerate(full_range):
-            for j, cj in enumerate(full_range):
-                W[i, j] = 1 - _d2(ci, cj) / max_d2
-        return W
+        # Gwet (2014) ordinal weights: M_ij = n_ij(n_ij-1)/2 with
+        # n_ij = |i-j|+1, then w_ij = 1 - M_ij / max(M).
+        for i in range(n_full):
+            for j in range(n_full):
+                n_ij = abs(i - j) + 1
+                W[i, j] = n_ij * (n_ij - 1) / 2.0
+        m_max = W.max()
+        return 1 - W / m_max if m_max > 0 else np.ones_like(W)
     # default / "quadratic" (Fleiss-Cohen)
     v = 2
     for i, ci in enumerate(full_range):
@@ -1144,7 +883,7 @@ def _gwet_ac2(X, weights="quadratic", alpha=0.05, q_declared=None, scale_min=Non
     Supports five weighting schemes (see _build_ac2_weight_matrix for
     individually verified formulas and primary sources): "quadratic"
     (Fleiss-Cohen, default), "linear" (Cicchetti-Allison), "radical",
-    "ordinal" (Krippendorff-style, frequency-based), and "identity"
+    "ordinal" (Gwet's rank-based ordinal weights), and "identity"
     (unweighted -- reduces exactly to AC1).
 
     Formula (Gwet, 2014, Chapter 4, Sec. 4.6, corrected -- see the note
@@ -1173,14 +912,11 @@ def _gwet_ac2(X, weights="quadratic", alpha=0.05, q_declared=None, scale_min=Non
     instrument's declared category count, not merely the count of
     distinct observed values. See _gwet_ac1's docstring for the full,
     source-verified argument (Gwet, Handbook of Inter-Rater Reliability,
-    4th ed., Ch. 4, Sec. 4.6). Unlike AC1's Pe, AC2's weight MATRIX values themselves do not
-    need reconstruction of unobserved category identities for the
-    label-based schemes (quadratic/linear/radical), because |c-c'| uses
-    the actual observed numeric category values directly -- only the
-    (q-1) normalizer requires the declared q. The "ordinal" scheme is the
-    exception: it is frequency-based and therefore uses scale_min (see
-    _build_ac2_weight_matrix) to correctly place unobserved categories
-    within the declared range.
+    4th ed., Ch. 4, Sec. 4.6). The weight matrix is built over the full
+    declared range [lo, lo+q-1] (lo = scale_min when declared), so the
+    sum u of all its cells, and the position of every observed category
+    within it, reflect the instrument's scale rather than only the
+    categories that happen to appear in this sample.
 
     Reference:
     Gwet, K. L. (2014). Handbook of Inter-Rater Reliability (4th ed.),
@@ -1220,9 +956,7 @@ def _gwet_ac2(X, weights="quadratic", alpha=0.05, q_declared=None, scale_min=Non
     # revision patched this case via direct delegation, working around
     # a since-corrected error in the previously implemented Pe_w formula).
 
-    all_valid_flat = X[~np.isnan(X)]
-    W = _build_ac2_weight_matrix(cats, q, weights, scale_min=scale_min,
-                                  X_flat_valid=all_valid_flat)
+    W = _build_ac2_weight_matrix(cats, q, weights, scale_min=scale_min)
     # cat_idx maps each OBSERVED category value to its position WITHIN
     # THE FULL DECLARED RANGE [lo, lo+q-1] -- the same indexing basis
     # _build_ac2_weight_matrix uses for W -- not a separate 0..q_observed-1
@@ -1461,120 +1195,69 @@ def _lin_ccc(r1, r2, alpha=0.05):
             "label":  _ccc_label(ccc)}
 
 
-def _dual_ci_note(coeff_name, se_basis, ci_lo_z, ci_hi_z, ci_lo_t, ci_hi_t, df):
+def _dual_ci_note(coeff_name, se_basis, ci_lo_z, ci_hi_z, ci_lo_t, ci_hi_t, df,
+                  alpha=0.05):
     """Generates the shared narrative note explaining the z-basis and
     t-basis confidence intervals for Scott's pi, Brennan-Prediger,
     Gwet's AC1, and Gwet's AC2 -- with citation strength presented
     honestly and asymmetrically rather than implying both bases rest on
     equally strong primary-source footing.
 
-    se_basis: "analytic" (Scott's pi, Brennan-Prediger -- Cohen (1960)'s
-    simplified large-sample SE formula; see the CORRECTION note in
-    _dual_ci()'s docstring for why this is no longer described as a
-    Fleiss-Cohen-Everitt (1969) delta-method derivation) or "jackknife"
-    (Gwet's AC1/AC2), since both the z-basis and t-basis citations differ
-    between these two cases (see docstring of _dual_ci for the full
-    argument).
+    se_basis: "analytic" (Brennan-Prediger: Cohen's 1960 SE with fixed
+    Pe = 1/q), "gwet2021" (Scott's pi: general Fleiss-kappa variance of
+    Gwet, 2021) or "jackknife" (Gwet's AC1/AC2).
     """
     if se_basis == "jackknife":
-        # CORRECTION (2026-10-21): this branch (Gwet's AC1/AC2) previously
-        # ALSO carried the same hardcoded Fleiss, Cohen & Everitt (1969)
-        # z-basis citation as the "analytic" branch below -- copied across
-        # both without checking it fits each one. It does not fit here
-        # either: AC1/AC2's SE is a JACKKNIFE estimate (Gwet, 2014,
-        # Appendix A), not a delta-method formula taken from that 1969
-        # kappa-specific paper. The asymptotic normality that licenses a
-        # z-basis CI for a jackknife estimate is a general jackknife-theory
-        # result, not something Fleiss, Cohen & Everitt (1969) derived.
+        # AC1/AC2: delete-one-unit jackknife SE (Efron & Tibshirani, 1993).
         z_evidence = (
-            f'for a jackknife variance estimate, this follows from general '
-            f'jackknife asymptotic theory -- Efron, B., &amp; Tibshirani, '
-            f'R.J. (1993). <i>An Introduction to the Bootstrap</i>. Chapman '
-            f'&amp; Hall, Ch. 11; Miller, R.G. (1974). The jackknife: A '
-            f'review. <i>Biometrika</i>, 61(1), 1\u201315 -- as implemented '
-            f'for this coefficient in Gwet\u2019s (2014) own framework.')
+            'the SE is a delete-one-unit jackknife estimate; its large-sample '
+            'normal approximation follows general jackknife theory (Efron, B., '
+            '&amp; Tibshirani, R.J. (1993). <i>An Introduction to the '
+            'Bootstrap</i>. Chapman &amp; Hall, Ch. 11).')
         t_evidence = (
-            "For a jackknife-derived SE (as used here), the t-basis has "
-            "independent support in the general jackknife resampling "
-            "literature -- Miller, R.G. (1974). The jackknife: A review. "
-            "<i>Biometrika</i>, 61(1), 1\u201315; Efron, B., &amp; Tibshirani, "
-            "R.J. (1993). <i>An Introduction to the Bootstrap</i>. Chapman "
-            "&amp; Hall, Ch. 11 -- both of which document the "
-            "\u201cjackknife t-interval\u201d as an established, conservative "
-            "convention, in addition to Gwet's (2014) own framework.")
+            "Intervals with Student's t on n − 1 degrees of freedom are the "
+            "convention of Gwet's (2014) inference framework as implemented in "
+            "Stata's <i>kappaetc</i> command (Klein, D. (2018). <i>The Stata "
+            "Journal</i>, 18(4), 871–901).")
+    elif se_basis == "gwet2021":
+        # Scott's pi = Fleiss' kappa with two raters.
+        z_evidence = (
+            'the SE is the general-purpose large-sample variance of Fleiss’ '
+            'kappa (Gwet, K.L. (2021). <i>Educational and Psychological '
+            'Measurement</i>, 81(4), 781–790), which applies here because '
+            'with two raters Fleiss’ kappa equals Scott’s π. The '
+            'z-test and p-value use the null-hypothesis SE of Fleiss, Nee '
+            '&amp; Landis (1979) instead, which is valid only under '
+            'H<sub>0</sub>: π = 0.')
+        t_evidence = (
+            "Gwet (2021) evaluated this variance with Student's t on n − 1 "
+            "degrees of freedom and reported coverage close to the nominal "
+            "level.")
     else:
-        # CORRECTION (2026-10-21): this branch (Scott's pi, Brennan-Prediger)
-        # previously also cited Fleiss, Cohen & Everitt (1969) here, copying
-        # the jackknife branch's citation. That is wrong for this branch:
-        # the SE actually implemented for these two coefficients
-        # (sqrt(Po(1-Po)/(N(1-Pe)^2))) is Cohen, J. (1960)'s original,
-        # simpler large-sample approximation -- not the Fleiss et al.
-        # (1969) formula, which this module's _cohen_kappa() implements
-        # separately (its Equations 8/9) and which is more complex and,
-        # per independent secondary-source documentation (NCSS/PASS
-        # "Confidence Intervals for Kappa") and this module's own fresh
-        # Monte Carlo re-verification (see _dual_ci()'s docstring for the
-        # full evidence), more accurate. Cohen's (1960) formula is kept
-        # here but is now named correctly and flagged as an approximation.
-        # NOTE: Cohen (1960)'s formula treats Pe as a fixed constant. For
-        # Scott's pi, Pe is itself ESTIMATED from the sample's marginals,
-        # so that assumption is only approximate -- independent Monte
-        # Carlo re-verification (see _scott_pi()'s docstring) found a
-        # moderate, non-vanishing SE overestimate (~5-40%, scenario-
-        # dependent) as a result. For Brennan-Prediger, Pe=1/q is a truly
-        # FIXED design constant (the declared category count, not an
-        # estimated quantity), so that same assumption is exact, not an
-        # approximation -- independent re-verification (see
-        # _brennan_prediger()'s docstring) found this coefficient's SE
-        # converging closely to the true sampling SD (ratio -> 1.0) as N
-        # grows, with no comparable bias. The two coefficients share a
-        # formula shape but NOT the same accuracy, so this note gives the
-        # shared citation and lets each coefficient's own docstring give
-        # its own, independently re-verified accuracy evidence.
-        is_scott = "\u03c0" in coeff_name or "Scott" in coeff_name
+        # Brennan-Prediger: Cohen's (1960) SE with Pe = 1/q fixed.
         z_evidence = (
-            f'the formula implemented here is Cohen, J. (1960). A '
-            f'coefficient of agreement for nominal scales. <i>Educational '
-            f'and Psychological Measurement</i>, 20(1), 37\u201346 -- a '
-            f'large-sample approximation that treats P<sub>e</sub> as a '
-            f'fixed constant. ' +
-            (f'For Scott\u2019s \u03c0, P<sub>e</sub> is itself estimated '
-             f'from the sample, so this is only approximate: independent '
-             f'Monte Carlo re-verification (three setups, N=86\u20131500) '
-             f'found a moderate SE overestimate (roughly 5\u201340%, '
-             f'scenario-dependent) that does NOT vanish as N grows -- '
-             f'treat this CI as conservative (slightly wide), not exact.'
-             if is_scott else
-             f'For Brennan-Prediger, P<sub>e</sub>=1/q is a genuinely '
-             f'fixed design constant (not estimated), so this assumption '
-             f'is exact here: independent Monte Carlo re-verification '
-             f'(N=86\u20131500) found this SE converging closely to the '
-             f'true sampling SD at every N tested, with no comparable '
-             f'bias.'))
+            'the SE is Cohen’s (1960) large-sample approximation '
+            '(<i>Educational and Psychological Measurement</i>, 20(1), '
+            '37–46), which treats P<sub>e</sub> as fixed; this holds '
+            'exactly here because P<sub>e</sub> = 1/q is set by the declared '
+            'number of categories.')
         t_evidence = (
-            "For this analytically-derived SE, the "
-            "t-basis rests on Gwet's (2014) statistical inference "
-            "framework alone, as implemented in Stata's <i>kappaetc</i> "
-            "command (Klein, 2018) -- without the additional independent "
-            "jackknife-literature support available for AC1/AC2. This "
-            "asymmetry in evidentiary strength is stated explicitly "
-            "rather than implying both bases are equally well-supported.")
+            "Intervals with Student's t on n − 1 degrees of freedom are the "
+            "convention of Gwet's (2014) inference framework as implemented in "
+            "Stata's <i>kappaetc</i> command (Klein, D. (2018). <i>The Stata "
+            "Journal</i>, 18(4), 871–901).")
     return (
         f'<div class="dual-ci-note">'
         f'<b>Two confidence intervals are reported for {coeff_name}, on two different, '
         f'both-legitimate theoretical bases:</b><br/>'
-        f'&bull; <b>z-basis (95% CI): [{_f_local(ci_lo_z)}, {_f_local(ci_hi_z)}]</b> \u2014 '
-        f'follows directly from the delta method\u2019s own asymptotic derivation '
-        f'(the estimator converges to a NORMAL, not Student-t, limit); '
+        f'&bull; <b>z-basis ({round((1 - alpha) * 100):g}% CI): [{_f_local(ci_lo_z)}, {_f_local(ci_hi_z)}]</b> \u2014 '
+        f'uses the standard normal critical value; '
         f'{z_evidence}<br/>'
         f'&bull; <b>t-basis (df={df}): [{_f_local(ci_lo_t)}, {_f_local(ci_hi_t)}]</b> \u2014 '
         f'a more conservative alternative (always at least as wide as the z-basis '
         f'interval). {t_evidence}<br/>'
-        f'<i>Neither basis is presented as universally \u201ccorrect\u201d \u2014 the '
-        f'z-basis follows directly from this SE formula\u2019s own theoretical origin; '
-        f'the t-basis is the more conservative, established practical convention. '
-        f'Researchers should select and report the basis appropriate to their '
-        f'field\u2019s convention and cite the corresponding source(s) above.</i>'
+        f'<i>The two intervals converge as n grows; report the basis that '
+        f'matches the convention of your field and cite its source.</i>'
         f'</div>')
 
 
@@ -1697,12 +1380,12 @@ def _bp_interp(kbp, label, n, q, data_type):
     return (
         f"Brennan-Prediger coefficient = {v:.3f} indicates <b>{strength} agreement</b> "
         f"between 2 raters on {n} units ({dtype_str}, {q} categories; {label}). "
-        f"The Brennan-Prediger coefficient assumes uniform distribution of "
-        f"ratings across all {q} categories (P_e = 1/{q} = {1/q:.3f}), "
-        f"making it the most conservative estimate of agreement. "
-        f"It is recommended when category distributions are highly unequal, "
-        f"as it avoids the paradoxes that affect Cohen's κ. "
-        f"Reference: Brennan & Prediger (1981)."
+        f"Chance agreement is fixed at P_e = 1/{q} = {1/q:.3f}, the value expected "
+        f"if raters used the {q} declared categories uniformly at random, so it "
+        f"does not depend on the observed category prevalence; the coefficient "
+        f"therefore depends on the declared number of categories q. With q = 2 it "
+        f"equals the prevalence-adjusted bias-adjusted kappa (Byrt, Bishop & "
+        f"Carlin, 1993). Reference: Brennan & Prediger (1981)."
     )
 
 
@@ -1732,18 +1415,18 @@ def _ccc_interp(ccc, rho, Cb, label, n):
     )
 
 
-def _pa_interp(pa, ci_lo, ci_hi, n, k):
+def _pa_interp(pa, ci_lo, ci_hi, n, k, alpha=0.05):
     """Descriptive interpretation for Percentage Agreement."""
     if pa is None or (isinstance(pa, float) and np.isnan(pa)):
         return "Result could not be computed."
     ci_str = (f"[{ci_lo:.3f}, {ci_hi:.3f}]"
               if not (np.isnan(ci_lo) or np.isnan(ci_hi)) else "—")
-    level = ("excellent" if pa >= 0.90 else "good" if pa >= 0.80
-             else "moderate" if pa >= 0.70 else "fair" if pa >= 0.60
-             else "poor")
+    # No verbal grade is attached: percentage agreement has no published,
+    # chance-adjusted benchmark scale, so an "excellent/good/..." label
+    # would be unsupported.
     return (
-        f"Percentage Agreement = {pa*100:.1f}% (95% CI {ci_str}) — "
-        f"<b>{level} observed agreement</b> across {k} raters on {n} units. "
+        f"Percentage Agreement = {pa*100:.1f}% ({round((1 - alpha) * 100):g}% CI {ci_str}) "
+        f"across {k} raters on {n} units. "
         f"Percentage Agreement does not correct for chance, so it should "
         f"always be reported alongside a chance-corrected coefficient "
         f"(Cohen's κ, Gwet's AC1, or Krippendorff's α). "
@@ -1792,16 +1475,16 @@ def _irar_method_context(data_type, k_raters, applicable_methods):
 
     method_descs = {
         "cohen":        "<b>Cohen's κ</b> — chance-corrected agreement for 2 raters, nominal/dichotomous (Cohen, 1960)",
-        "gwet_ac1":     "<b>Gwet's AC1</b> — stable alternative to Cohen's κ, avoids prevalence paradox (Gwet, 2008)",
+        "gwet_ac1":     "<b>Gwet's AC1</b> — chance-corrected agreement with a chance model based on pooled category prevalence (Gwet, 2008)",
         "scott_pi":     "<b>Scott's π</b> — agreement using averaged marginal proportions (Scott, 1955)",
-        "bp":           "<b>Brennan-Prediger</b> — most conservative estimate, assumes uniform category distribution (Brennan & Prediger, 1981)",
+        "bp":           "<b>Brennan-Prediger</b> — chance agreement fixed at 1/q for the q declared categories (Brennan & Prediger, 1981)",
         "pct":          "<b>Percentage Agreement</b> — observed agreement without chance correction (reported as baseline)",
         "fleiss":       "<b>Fleiss' κ</b> — generalises Cohen's κ to ≥3 raters, nominal/dichotomous (Fleiss, 1971)",
-        "weighted":     "<b>Weighted Cohen's κ</b> — ordinal agreement with quadratic weights for 2 raters (Cohen, 1968)",
-        "gwet_ac2":     "<b>Gwet's AC2</b> — weighted version of AC1, more stable than Weighted κ for ordinal data (Gwet, 2014)",
-        "icc":          "<b>ICC (6 forms)</b> — gold standard for continuous data: two-way absolute (ICC-A) and consistency (ICC-C) models (Shrout & Fleiss, 1979)",
+        "weighted":     "<b>Weighted Cohen's κ</b> — ordinal agreement for 2 raters with linear and quadratic weights (Cohen, 1968)",
+        "gwet_ac2":     "<b>Gwet's AC2</b> — weighted version of AC1 for ordered categories (Gwet, 2014)",
+        "icc":          "<b>ICC (6 forms)</b> — one-way, two-way absolute-agreement (ICC-A) and two-way consistency (ICC-C) models, single and average measures (Shrout & Fleiss, 1979; McGraw & Wong, 1996)",
         "ccc":          "<b>Lin's CCC</b> — measures precision and accuracy simultaneously for 2 raters (Lin, 1989)",
-        "krippendorff": "<b>Krippendorff's α</b> — universal measure: any data type, any number of raters, handles missing data (Krippendorff, 2004)",
+        "krippendorff": "<b>Krippendorff's α</b> — any number of raters, nominal to ratio metrics, missing ratings allowed (Krippendorff, 2004)",
     }
 
     # Short, method-specific guidance fragments. Combined dynamically
@@ -1810,13 +1493,13 @@ def _irar_method_context(data_type, k_raters, applicable_methods):
     # and no inapplicable method is ever recommended.
     guidance_fragments = {
         "pct":          "Report as a descriptive baseline alongside any chance-corrected coefficient below; it is not itself chance-corrected.",
-        "cohen":        "A universally recognised primary index for 2-rater nominal/dichotomous data.",
-        "gwet_ac1":     "Recommended as the <b>primary index</b> when category prevalence is unequal or skewed (avoids the kappa paradox).",
+        "cohen":        "The established chance-corrected index for 2-rater nominal/dichotomous data (Cohen, 1960); read it together with the prevalence and bias indices shown in its tab (Byrt, Bishop & Carlin, 1993).",
+        "gwet_ac1":     "Less sensitive than κ to skewed category prevalence (Gwet, 2008); it responds differently from κ to prevalence, so the two should be read side by side rather than interchangeably (Vach & Gerke, 2023).",
         "scott_pi":     "A useful cross-check against Cohen's κ; differs only in how chance agreement is modelled from the marginals.",
-        "bp":           "The most conservative (uniform-chance) estimate; useful as a lower-bound sensitivity check.",
+        "bp":           "Its chance term depends only on the declared number of categories, not on the observed marginals, so it is unaffected by category prevalence through P_e.",
         "fleiss":       "The standard index for ≥3-rater nominal/dichotomous agreement; generalises Cohen's κ.",
-        "weighted":     "Widely used in educational and clinical research for 2-rater ordinal agreement.",
-        "gwet_ac2":     "Recommended as the <b>primary index</b> for ordinal data — more stable than Weighted κ under skewed marginals.",
+        "weighted":     "Gives partial credit to near-agreements on an ordered scale; quadratic weights penalise large disagreements most (Cohen, 1968).",
+        "gwet_ac2":     "Weighted extension of AC1 for ordered categories, reported under five weighting schemes so the effect of the weighting choice is visible (Gwet, 2014).",
         "icc":          "ICC(A,1) is recommended for single-rater absolute-agreement reliability; use ICC(A,k) if the mean of all raters' scores will be used in practice.",
         "ccc":          "Recommended when both precision (correlation) and accuracy (mean bias) need to be assessed simultaneously.",
         "krippendorff": "A universal complementary estimate that handles missing data and remains comparable across data types.",
@@ -1836,15 +1519,15 @@ def _irar_method_context(data_type, k_raters, applicable_methods):
 
     # Dynamic guidance: one list item per APPLICABLE method, in the same
     # order as method_list, so nothing computed is ever left undiscussed
-    # and nothing uncomputed is ever recommended.
-    primary_keys = {"gwet_ac1", "gwet_ac2"}
+    # and nothing uncomputed is ever recommended. No coefficient is tagged
+    # as the single "primary" index: all applicable coefficients are
+    # reported side by side.
     guidance_items = []
     for m in applicable_methods:
         if m not in method_descs or m not in guidance_fragments:
             continue
         name_only = method_descs[m].split(" — ")[0]  # keeps the <b>...</b> pair intact
-        tag = " <b>[Recommended primary]</b>" if m in primary_keys else ""
-        guidance_items.append(f"&bull; {name_only}{tag} — {guidance_fragments[m]}")
+        guidance_items.append(f"&bull; {name_only} — {guidance_fragments[m]}")
     guidance = "<br/>".join(guidance_items)
 
     return {"intro": intro, "methods": method_list, "guidance": guidance}
@@ -1986,10 +1669,22 @@ def _kappa_se_z_p_exact(O_counts, W, alpha=0.05):
             "p": p_val}
 
 
-def _cohen_kappa(X, rater_names, alpha=0.05):
+def _cohen_kappa(X, rater_names, alpha=0.05, data_type=None,
+                 q_declared=None, scale_min=None):
     """Cohen's Kappa for exactly 2 raters (columns of X).
     Returns a result dict or None on failure.
-    Supports: standard κ (all types) + weighted κ linear & quadratic (ordinal)."""
+    Supports: standard κ (all types) + weighted κ linear & quadratic (ordinal).
+
+    data_type: the data type the user declared for the rating group
+    ("dichotomous", "nominal" or "ordinal"); auto-detected only when not
+    supplied. For declared ordinal data with a declared scale (scale_min,
+    q_declared), the category set is the full declared scale
+    [scale_min, scale_min + q_declared - 1] (plus any observed value outside
+    it), so the linear/quadratic weights w_ij = 1 - |i-j|/(q-1) and
+    1 - (i-j)^2/(q-1)^2 use the instrument's q rather than only the
+    categories observed in this sample (Cohen, 1968). Categories that no
+    rater used contribute empty rows/columns and leave unweighted kappa
+    unchanged."""
     if not _SKL or X.shape[1] != 2:
         return None
     try:
@@ -1998,17 +1693,21 @@ def _cohen_kappa(X, rater_names, alpha=0.05):
     except Exception:
         return None
     n    = len(r1)
-    dtype = _detect_data_type(list(r1) + list(r2))
+    dtype = data_type if data_type else _detect_data_type(list(r1) + list(r2))
     names = (rater_names if rater_names and len(rater_names) >= 2
              else ["Rater 1", "Rater 2"])
 
+    cats_sorted = sorted(set(r1.tolist() + r2.tolist()))
+    if dtype == "ordinal" and q_declared and scale_min is not None:
+        cats_sorted = sorted(set(range(int(scale_min), int(scale_min) + int(q_declared)))
+                             | set(cats_sorted))
+
     def _safe_kappa(a, b, weights=None):
         try:
-            return float(_skl_kappa(a, b, weights=weights))
+            return float(_skl_kappa(a, b, weights=weights, labels=cats_sorted))
         except Exception:
             return np.nan
 
-    cats_sorted = sorted(set(r1.tolist() + r2.tolist()))
     nc = len(cats_sorted)
     cat_map = {c: i for i, c in enumerate(cats_sorted)}
     O_counts = np.zeros((nc, nc))
@@ -2027,13 +1726,21 @@ def _cohen_kappa(X, rater_names, alpha=0.05):
         W = _cohen_kappa_weight_matrix(nc, scheme)
         exact = _kappa_se_z_p_exact(O_counts, W)
         k_sklearn = _safe_kappa(r1, r2, weights=None if scheme == "unweighted" else scheme)
+        k_val = k_sklearn if not np.isnan(k_sklearn) else exact["kappa"]
+        # Confidence interval from the general-purpose variance (Fleiss,
+        # Cohen & Everitt, 1969, Eq. 8, "useful in setting confidence
+        # limits"); the null variance (Eq. 9) is used only for z and p.
+        _dual = _dual_ci(k_val, exact["se_general"], n, alpha)
         variants[scheme] = {
-            "kappa": k_sklearn if not np.isnan(k_sklearn) else exact["kappa"],
+            "kappa": k_val,
             "se_general": exact["se_general"],
             "se_null": exact["se_null"],
             "z": exact["z"],
             "p": exact["p"],
-            "label": kappa_label(k_sklearn if not np.isnan(k_sklearn) else exact["kappa"]),
+            "ci_lo_z": _dual["ci_lo_z"], "ci_hi_z": _dual["ci_hi_z"],
+            "ci_lo_t": _dual["ci_lo_t"], "ci_hi_t": _dual["ci_hi_t"],
+            "ci_df": _dual["df"],
+            "label": kappa_label(k_val),
         }
 
     k_std  = variants["unweighted"]["kappa"]
@@ -2140,33 +1847,19 @@ def _cohen_kappa(X, rater_names, alpha=0.05):
             not np.isnan(ase_s) and ase_s < 1e-9)
         else None
     )
-    # No CI reported -- the null-hypothesis variance (Fleiss, Cohen &
-    # Everitt, 1969, Equation 9) used for z/p above is valid for the
-    # significance test but not for confidence-interval construction,
-    # which would require Equation 8 (the general-purpose variance,
-    # se_general, exposed per-variant above but not currently used to
-    # build a reported interval by this module). This mirrors the
-    # identical, explicitly disclosed treatment applied to Fleiss' kappa
-    # elsewhere in this module.
-    res["kappa_ci_lo"] = np.nan
-    res["kappa_ci_hi"] = np.nan
+    # Two standard errors are reported (Fleiss, Cohen & Everitt, 1969):
+    # Equation 9 (null-hypothesis variance) for z and p, and Equation 8
+    # (general-purpose variance) for the confidence interval.
+    res["kappa_ci_lo"] = variants["unweighted"]["ci_lo_z"]
+    res["kappa_ci_hi"] = variants["unweighted"]["ci_hi_z"]
     res["kappa_ci_note"] = (
-        "No confidence interval is reported. The standard error above "
-        "(Fleiss, Cohen & Everitt, 1969, Equation 9) is the null-hypothesis "
-        "(H0: kappa=0) variance, valid only for the significance test "
-        "(the z and p-value shown), not for quantifying precision or "
-        "constructing a confidence interval -- Equation 8 of the same "
-        "paper, a distinct general-purpose variance formula the authors "
-        "themselves describe as \"useful in setting confidence limits,\" "
-        "would be the theoretically appropriate basis for an interval, "
-        "and is computed by this module (exposed per-scheme as se_general) "
-        "but not currently used to construct a reported confidence "
-        "interval. This mirrors the identical, explicitly disclosed "
-        "treatment applied to Fleiss' kappa elsewhere in this module "
-        "(Gwet, K.L., 2021. Large-sample variance of Fleiss generalized "
-        "kappa. Educational and Psychological Measurement, 81(4), "
-        "781-790).")
-    if dtype == "dichotomous":
+        "Two standard errors from Fleiss, Cohen & Everitt (1969) are "
+        "reported. The null-hypothesis SE (Equation 9, valid when "
+        "kappa = 0) is used only for the z statistic and p-value. The "
+        "confidence interval uses the general-purpose SE (Equation 8), "
+        "which the authors give for setting confidence limits; z-basis "
+        "and t-basis (df = n - 1) intervals are both shown.")
+    if len(cats_sorted) == 2:
         # Prevalence Index (PI) and Bias Index (BI), Byrt, Bishop, &
         # Carlin (1993, J Clin Epidemiol, 46(5), 423-429): from the 2x2
         # table a (both rate "1"), b (rater1=1,rater2=0), c (rater1=0,
@@ -2181,10 +1874,13 @@ def _cohen_kappa(X, rater_names, alpha=0.05):
         # on the worked example a=55,b=7,c=12,d=12 (n=86) from Byrt et
         # al. (1993) itself: correct PI=0.5000, BI=-0.0581; the previous
         # code returned PI=0.0291, BI=-0.0291 for that same table.
-        a = float(np.sum((r1 == 1) & (r2 == 1)))
-        b = float(np.sum((r1 == 1) & (r2 == 0)))
-        c = float(np.sum((r1 == 0) & (r2 == 1)))
-        d = float(np.sum((r1 == 0) & (r2 == 0)))
+        # The higher of the two category codes is treated as the
+        # "positive" category (code 1 for the usual 0/1 coding).
+        _neg, _pos = cats_sorted
+        a = float(np.sum((r1 == _pos) & (r2 == _pos)))
+        b = float(np.sum((r1 == _pos) & (r2 == _neg)))
+        c = float(np.sum((r1 == _neg) & (r2 == _pos)))
+        d = float(np.sum((r1 == _neg) & (r2 == _neg)))
         n_pi = a + b + c + d
         res["prevalence_index"] = abs(a - d) / n_pi if n_pi > 0 else np.nan
         res["bias_index"]       = (b - c) / n_pi if n_pi > 0 else np.nan
@@ -2270,12 +1966,12 @@ def _fleiss_kappa(X, rater_names, alpha=0.05):
     Fleiss' kappa. Instead, it should be used solely for testing the
     hypothesis of zero agreement among raters" (i.e. it is valid for the
     H0: κ=0 significance test reported below, NOT for confidence-interval
-    construction around the actual estimated κ). This is the exact same
-    theoretical distinction already documented for Cohen's kappa
-    elsewhere in this module. Accordingly, NO confidence interval is
-    computed or reported for Fleiss' kappa by this function -- reporting
-    one from this SE would misrepresent the coefficient's true precision,
-    per Gwet's (2021) formal demonstration.
+    construction around the actual estimated κ). It is therefore used here
+    only for z and p. The confidence interval is built from the general-
+    purpose variance that Gwet (2021, Equations 4-6) derived for interval
+    estimation (see the code below), reported on a t-basis (df = n - 1,
+    as evaluated in Gwet's own Monte Carlo study) and a z-basis.
+    (Revised 2026-10-23: an earlier revision reported no interval at all.)
 
     CORRECTION (2026-10-21): an earlier revision of this function used a
     SE formula derived independently "from first principles" rather than
@@ -2363,6 +2059,20 @@ def _fleiss_kappa(X, rater_names, alpha=0.05):
         z   = kappa_overall / se if se > 1e-12 else np.nan
         p   = float(2 * scipy_stats.norm.sf(abs(z))) if not np.isnan(z) else np.nan
 
+        # General-purpose variance for interval estimation (Gwet, K.L.
+        # (2021). Large-sample variance of Fleiss generalized kappa.
+        # Educational and Psychological Measurement, 81(4), 781-790,
+        # Equations 4-6, finite-population correction f = 0):
+        #   kappa_i  = (pa_i - pe)/(1 - pe),  pa_i = sum_c n_ic(n_ic-1)/(k(k-1))
+        #   pe_i     = sum_c p_c n_ic / k
+        #   kappa*_i = kappa_i - 2(1 - kappa)(pe_i - pe)/(1 - pe)
+        #   var_G    = sum_i (kappa*_i - kappa)^2 / (n(n-1))
+        pe_i = (table * p_j[None, :]).sum(axis=1) / k
+        kap_i = (P_i - P_e) / (1 - P_e)
+        kap_star = kap_i - 2 * (1 - kappa_overall) * (pe_i - P_e) / (1 - P_e)
+        se_general = float(np.sqrt(np.sum((kap_star - kappa_overall) ** 2) / (n * (n - 1)))) if n > 1 else np.nan
+        _dual = _dual_ci(kappa_overall, se_general, n, alpha)
+
         # Per-category κ (Fleiss 1971, eq. 14)
         kappa_per_cat = {}
         p_per_cat     = {}
@@ -2389,26 +2099,20 @@ def _fleiss_kappa(X, rater_names, alpha=0.05):
             # -- exact 0 there is legitimate and unrelated to this fix.)
             "kappa_p":     p if not np.isnan(p) else np.nan,
             "kappa_label": kappa_label(kappa_overall),
-            # No CI reported -- see docstring: the SE above is the
-            # Fleiss et al. (1979) null-hypothesis (H0: kappa=0) variance,
-            # formally shown by Gwet (2021, EPM 81(4), 781-790) to be
-            # invalid for confidence-interval construction, valid only
-            # for the significance test the SE/z/p above already provide.
-            "kappa_ci_lo": np.nan,
-            "kappa_ci_hi": np.nan,
+            "kappa_se_general": se_general,
+            "ci_lo_z": _dual["ci_lo_z"], "ci_hi_z": _dual["ci_hi_z"],
+            "ci_lo_t": _dual["ci_lo_t"], "ci_hi_t": _dual["ci_hi_t"],
+            "ci_df": _dual["df"],
+            "kappa_ci_lo": _dual["ci_lo_t"],
+            "kappa_ci_hi": _dual["ci_hi_t"],
             "kappa_ci_note": (
-                "No confidence interval is reported. The standard error "
-                "above (Fleiss, Nee & Landis, 1979 -- the same formula "
-                "widely used across major general-purpose statistical "
-                "software, including R's \"rel\" package) is valid only for "
-                "testing H0: kappa=0 (the z and p-value shown), not for "
-                "quantifying precision or constructing a confidence "
-                "interval -- a distinction formally demonstrated by "
-                "Gwet, K.L. (2021). Large-sample variance of Fleiss "
-                "generalized kappa. Educational and Psychological "
-                "Measurement, 81(4), 781-790. This mirrors the identical, "
-                "already-documented treatment of Cohen's kappa elsewhere "
-                "in this module."),
+                "Two standard errors are reported. The null-hypothesis SE "
+                "of Fleiss, Nee & Landis (1979) is valid only for testing "
+                "H0: kappa = 0 and is used only for z and p (Gwet, 2021). "
+                "The confidence interval uses Gwet's (2021) general-purpose "
+                "variance (Equations 4-6), with the t-basis interval "
+                "(df = n - 1) that Gwet (2021) evaluated and the z-basis "
+                "interval both shown."),
             "kappa_per_category": kappa_per_cat,
             "p_per_category":     p_per_cat,
         }
@@ -3819,16 +3523,81 @@ def _icc_if_deleted(X, item_names):
     return pd.DataFrame(rows)
 
 
-def _icc(X, item_names):
-    """Intraclass correlation (all six standard forms) via pingouin.
+_PINGOUIN_LEGACY_ICC_TYPES = {
+    # pingouin < 0.7 labelled the six forms ICC1 ... ICC3k; pingouin >= 0.7
+    # uses the McGraw & Wong (1996) notation below. Both are accepted.
+    "ICC1": "ICC(1,1)", "ICC2": "ICC(A,1)", "ICC3": "ICC(C,1)",
+    "ICC1k": "ICC(1,k)", "ICC2k": "ICC(A,k)", "ICC3k": "ICC(C,k)",
+}
 
-    Pingouin ICC type mapping (Shrout & Fleiss, 1979):
-        ICC(A,1)  = two-way random, absolute agreement, single rater   [common notation: ICC(2,1)]
-        ICC(A,k)  = two-way random, absolute agreement, mean of k raters [common notation: ICC(2,k)]
-        ICC(C,1)  = two-way mixed, consistency, single rater             [common notation: ICC(3,1)]
-        ICC(C,k)  = two-way mixed, consistency, mean of k raters         [common notation: ICC(3,k)]
-        ICC(1,1)  = one-way random, single rater                         [common notation: ICC(1,1)]
 
+def _icc_confidence_intervals(X, alpha=0.05):
+    """(1 - alpha) confidence intervals for the six ICC forms, using the
+    F-distribution-based formulas of McGraw, K.O., & Wong, S.P. (1996).
+    Forming inferences about some intraclass correlation coefficients.
+    Psychological Methods, 1(1), 30-46 -- the same formulas pingouin's
+    intraclass_corr() applies, there with the confidence level fixed at
+    95%. Evaluated here at the user-selected alpha; at alpha=0.05 the
+    bounds are identical to pingouin's own (checked in the test suite).
+
+    X: (n targets x k raters) complete matrix. Returns dict Type -> (lo, hi).
+    """
+    X = np.asarray(X, dtype=float)
+    n, k = X.shape
+    grand = X.mean()
+    ss_rows = k * np.sum((X.mean(axis=1) - grand) ** 2)
+    ss_cols = n * np.sum((X.mean(axis=0) - grand) ** 2)
+    ss_tot = np.sum((X - grand) ** 2)
+    ss_err = ss_tot - ss_rows - ss_cols
+    df_r, df_c, df_e, df_w = n - 1, k - 1, (n - 1) * (k - 1), n * (k - 1)
+    msb = ss_rows / df_r
+    msj = ss_cols / df_c
+    mse = ss_err / df_e
+    msw = (ss_tot - ss_rows) / df_w
+    f1 = msb / msw
+    f3 = msb / mse
+    icc2 = (msb - mse) / (msb + (k - 1) * mse + k * (msj - mse) / n)
+    fdist = scipy_stats.f
+    # One-way (case 1) and consistency (case 3)
+    f1l = f1 / fdist.ppf(1 - alpha / 2, df_r, df_w)
+    f1u = f1 * fdist.ppf(1 - alpha / 2, df_w, df_r)
+    f3l = f3 / fdist.ppf(1 - alpha / 2, df_r, df_e)
+    f3u = f3 * fdist.ppf(1 - alpha / 2, df_e, df_r)
+    l1, u1 = (f1l - 1) / (f1l + (k - 1)), (f1u - 1) / (f1u + (k - 1))
+    l3, u3 = (f3l - 1) / (f3l + (k - 1)), (f3u - 1) / (f3u + (k - 1))
+    # Absolute agreement (case 2): Satterthwaite-approximated df v
+    fj = msj / mse
+    vn = df_e * (k * icc2 * fj + n * (1 + (k - 1) * icc2) - k * icc2) ** 2
+    vd = df_r * k ** 2 * icc2 ** 2 * fj ** 2 + (n * (1 + (k - 1) * icc2) - k * icc2) ** 2
+    v = vn / vd
+    f2u = fdist.ppf(1 - alpha / 2, n - 1, v)
+    f2l = fdist.ppf(1 - alpha / 2, v, n - 1)
+    l2 = n * (msb - f2u * mse) / (f2u * (k * msj + (k * n - k - n) * mse) + n * msb)
+    u2 = n * (f2l * msb - mse) / (k * msj + (k * n - k - n) * mse + n * f2l * msb)
+    return {
+        "ICC(1,1)": (l1, u1),
+        "ICC(A,1)": (l2, u2),
+        "ICC(C,1)": (l3, u3),
+        "ICC(1,k)": (1 - 1 / f1l, 1 - 1 / f1u),
+        "ICC(A,k)": (l2 * k / (1 + l2 * (k - 1)), u2 * k / (1 + u2 * (k - 1))),
+        "ICC(C,k)": (1 - 1 / f3l, 1 - 1 / f3u),
+    }
+
+
+def _icc(X, item_names, alpha=0.05):
+    """Intraclass correlation, all six forms, via pingouin's
+    intraclass_corr() (point estimates, F tests, p-values), with the
+    confidence intervals evaluated at the requested alpha by
+    _icc_confidence_intervals() (McGraw & Wong, 1996).
+
+    Notation (McGraw & Wong, 1996; Shrout & Fleiss, 1979 numbering in
+    brackets):
+        ICC(1,1)  one-way random effects, single rater          [ICC(1,1)]
+        ICC(A,1)  two-way, absolute agreement, single rater     [ICC(2,1)]
+        ICC(C,1)  two-way, consistency, single rater            [ICC(3,1)]
+        ICC(1,k), ICC(A,k), ICC(C,k): the same three, for the mean of k raters.
+
+    The CI column is named "CI<level>%" (e.g. "CI95%" for alpha=0.05).
     Returns DataFrame or None when data is degenerate.
     """
     if pg is None:
@@ -3848,41 +3617,35 @@ def _icc(X, item_names):
         })
         res = pg.intraclass_corr(data=long, targets="target",
                                  raters="rater", ratings="score")
-        # Normalise CI column name (older pingouin: CI95%, newer: CI95)
-        ci_col = next((c for c in ["CI95%", "CI95"] if c in res.columns), None)
-        cols = ["Type", "ICC", "F", "df1", "df2", "pval"]
-        if ci_col:
-            cols.append(ci_col)
-        out = res[cols].copy()
-        if ci_col and ci_col != "CI95%":
-            out = out.rename(columns={ci_col: "CI95%"})
+        out = res[["Type", "ICC", "F", "df1", "df2", "pval"]].copy()
+        out["Type"] = out["Type"].replace(_PINGOUIN_LEGACY_ICC_TYPES)
         if out["ICC"].isna().all():
             return None
-        # Round ICC and F for display-adjacent convenience, but NOT pval:
-        # pval must retain full floating-point precision here. Rounding it
-        # to 3dp at the engine level would silently convert any genuinely
-        # tiny p-value (e.g. 3.1e-10 for a very large F-statistic — entirely
-        # plausible with strong rater agreement) into a literal 0.0 float,
-        # which is statistically dishonest (p is never exactly zero) and
-        # indistinguishable downstream from "value not computed". Display
-        # -time rounding/thresholding is the sole responsibility of the
-        # _p() formatter in utils/formatters.py.
+        ci_by_type = _icc_confidence_intervals(X, alpha=alpha)
+        ci_col = f"CI{round((1 - alpha) * 100):g}%"
+        out[ci_col] = [np.array(ci_by_type.get(t, (np.nan, np.nan)), dtype=float)
+                       for t in out["Type"]]
+        # ICC and F as plain floats; pval is NOT rounded here (a genuinely
+        # tiny p-value must not become a literal 0.0 -- display-time
+        # formatting is the responsibility of utils/formatters.py).
         for col in ["ICC", "F"]:
-            if col in out.columns:
-                out[col] = out[col].apply(
-                    lambda v: float(v) if pd.notna(v) else np.nan)
+            out[col] = out[col].apply(lambda v: float(v) if pd.notna(v) else np.nan)
         return out
     except Exception:
         return None
 
 
 def _parse_icc_df(icc_df):
-    """Parse pingouin ICC DataFrame into named dict.
-    Uses correct pingouin type names: ICC(A,1), ICC(A,k), ICC(C,1), ICC(C,k).
-    Maps pingouin type names to the common ICC(2,1), ICC(2,k), ICC(3,1), ICC(3,k) notation.
+    """Parse the ICC DataFrame returned by _icc() into a named dict.
+    Type names follow McGraw & Wong (1996): ICC(1,1), ICC(A,1), ICC(C,1),
+    ICC(1,k), ICC(A,k), ICC(C,k) [Shrout & Fleiss numbering: ICC(1,1),
+    ICC(2,1), ICC(3,1), ICC(1,k), ICC(2,k), ICC(3,k)]. The confidence-
+    interval column is whichever "CI<level>%" column _icc() produced.
     """
     if icc_df is None or not isinstance(icc_df, pd.DataFrame):
         return None
+    ci_col = next((c for c in icc_df.columns if str(c).startswith("CI")), None)
+    _ci_level = ci_col[2:] if ci_col else "95%"
 
     def _get(itype):
         row = icc_df[icc_df["Type"] == itype]
@@ -3890,7 +3653,7 @@ def _parse_icc_df(icc_df):
             return np.nan, np.nan, np.nan, np.nan
         v  = float(row["ICC"].iloc[0])
         p  = float(row["pval"].iloc[0]) if "pval" in row.columns else np.nan
-        ci = row["CI95%"].iloc[0] if "CI95%" in row.columns else [np.nan, np.nan]
+        ci = row[ci_col].iloc[0] if ci_col else [np.nan, np.nan]
         if isinstance(ci, str):
             # Parse string like "[-0.32, 0.15]"
             try:
@@ -3963,7 +3726,8 @@ def _parse_icc_df(icc_df):
         "icc_3_k_label":    _lbl(i3k),
         "interpretation_text": "",  # filled by caller
         "formula_note": (
-            "Pingouin intraclass_corr (Shrout & Fleiss, 1979). "
+            "Point estimates, F tests and p-values: pingouin intraclass_corr "
+            "(Shrout & Fleiss, 1979; McGraw & Wong, 1996). "
             "ICC(2,1) [pingouin: ICC(A,1)]: two-way random effects, absolute agreement, single rater — "
             "PRIMARY index: use when each unit is rated by the same raters drawn randomly from a larger pool. "
             "ICC(2,k) [pingouin: ICC(A,k)]: absolute agreement for mean of k raters — "
@@ -3973,7 +3737,7 @@ def _parse_icc_df(icc_df):
             "ICC(3,k) [pingouin: ICC(C,k)]: consistency for mean of k raters. "
             "Absolute agreement (ICC2) is stricter: it penalises systematic rater bias. "
             "Consistency (ICC3) does not. "
-            "95% CI via F-distribution. "
+            f"{_ci_level} CI via the F distribution (McGraw & Wong, 1996). "
             "Benchmarks — Koo & Li (2016): <0.50 Poor; 0.50–0.75 Moderate; "
             "0.75–0.90 Good; >0.90 Excellent."),
     }
@@ -4765,12 +4529,13 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                 "mean": pa_res["mean"], "sd": pa_res["sd"],
                 "minimum": pa_res["minimum"], "maximum": pa_res["maximum"],
                 "interpretation_text": _pa_interp(pa_res["pa"], pa_res["ci_lo"],
-                                                    pa_res["ci_hi"], n_units, k_raters),
+                                                    pa_res["ci_hi"], n_units, k_raters,
+                                                    alpha=alpha),
             }
 
         # ── Cohen's κ (dichotomous/nominal, k=2) ─────────────────────────
         if "cohen" in applicable and k_raters == 2:
-            ck = _cohen_kappa(X, cols, alpha)
+            ck = _cohen_kappa(X, cols, alpha, data_type=data_type)
             if ck:
                 ck["interpretation_text"] = _irar_strength_interp(
                     "Cohen's κ", ck["kappa"], ck["kappa_label"],
@@ -4779,7 +4544,8 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                     "κ = (P_o − P_e) / (1 − P_e). "
                     "P_o = observed proportion of agreement. "
                     "P_e = Σ_c p_c(r1) × p_c(r2) = expected agreement by chance. "
-                    "SE via Fleiss, Cohen & Everitt (1969); z = κ/SE; two-tailed p. "
+                    "SE for z and p: Fleiss, Cohen & Everitt (1969), Eq. 9 (H0: κ = 0); "
+                    "SE for the confidence interval: Eq. 8 of the same paper. "
                     "Prevalence Index (PI) = |a − d| / n; Bias Index (BI) = (b − c) / n, "
                     "from the 2×2 table a=both rate '1', b=rater1 '1'/rater2 '0', "
                     "c=rater1 '0'/rater2 '1', d=both rate '0' (Byrt, Bishop, & Carlin, 1993). "
@@ -4788,7 +4554,8 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
 
         # ── Weighted Cohen's κ (ordinal, k=2) ────────────────────────────
         if "weighted" in applicable and k_raters == 2:
-            ck_w = _cohen_kappa(X, cols, alpha)
+            ck_w = _cohen_kappa(X, cols, alpha, data_type=data_type,
+                                q_declared=q_declared, scale_min=scale_min)
             if ck_w and "kappa_quadratic" in ck_w:
                 ck_w["primary_value"] = ck_w.get("kappa_quadratic", np.nan)
                 ck_w["primary_label"] = ck_w.get("kappa_quadratic_label","—")
@@ -4798,13 +4565,15 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                     ck_w.get("kappa_quadratic_label","—"),
                     n_units, k_raters, data_type)
                 ck_w["formula_note"] = (
-                    "Quadratic weights: w_ij = 1 − (i−j)²/(k−1)². "
-                    "Linear weights: w_ij = 1 − |i−j|/(k−1). "
-                    "κ_w = 1 − Σw_ij·d_ij / Σw_ij·e_ij "
-                    "(Cohen, 1968). "
-                    "Quadratic weights recommended for Likert-type scales — "
-                    "larger disagreements penalised proportionally more. "
-                    "Note: κ_w (quadratic) ≈ ICC(2,1) for continuous data.")
+                    "κ_w = (Σ w_ij p_ij − Σ w_ij p_i· p_·j) / (1 − Σ w_ij p_i· p_·j) "
+                    "(Cohen, 1968), with agreement weights over the q categories of "
+                    "the declared scale: quadratic w_ij = 1 − (i−j)²/(q−1)², "
+                    "linear w_ij = 1 − |i−j|/(q−1). "
+                    "Quadratic weights penalise larger disagreements "
+                    "disproportionately more; with quadratic weights κ_w is "
+                    "closely related to the intraclass correlation coefficient "
+                    "(Fleiss & Cohen, 1973). SE, z and p: Fleiss, Cohen & "
+                    "Everitt (1969).")
             res["weighted_kappa"] = ck_w
 
         # ── Fleiss' κ (dichotomous/nominal, k≥3) ─────────────────────────
@@ -4818,7 +4587,8 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                     "κ = (P̄ − P̄_e) / (1 − P̄_e) (Fleiss, 1971). "
                     "P̄ = (1/N)Σ_i[(1/k(k−1))Σ_j n_ij(n_ij−1)]. "
                     "P̄_e = Σ_j p_j² (expected by chance). "
-                    "SE via Fleiss, Nee, & Landis (1979). "
+                    "SE for z and p (H0: κ = 0): Fleiss, Nee & Landis (1979); "
+                    "SE for the confidence interval: Gwet (2021). "
                     "Per-category κ_j also reported. "
                     "Note: Fleiss' κ treats all categories as nominal — "
                     "for ordinal ≥3 raters, Krippendorff's α (ordinal metric) is more appropriate.")
@@ -4827,7 +4597,7 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
         # ── ICC (interval/ratio) ──────────────────────────────────────────
         if "icc" in applicable:
             try:
-                icc_df = _icc(X, cols)
+                icc_df = _icc(X, cols, alpha=alpha)
                 if icc_df is not None and isinstance(icc_df, pd.DataFrame):
                     icc_res = _parse_icc_df(icc_df)
                     if icc_res is not None:
@@ -4876,7 +4646,8 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                                    "(cumulative marginal distribution).",
                        "interval": "d(a,b) = (a−b)².",
                        "ratio":    "d(a,b) = ((a−b)/(a+b))²."}[dt_k]
-                    + f" 95% CI: percentile bootstrap ({n_boot:,} resamples, seed=42). "
+                    + f" {round((1 - alpha) * 100):g}% CI: percentile bootstrap over rated units "
+                    f"({n_boot:,} resamples of units with replacement, seed=42). "
                     f"Handles missing data and any number of raters. "
                     f"Thresholds: α≥0.800 reliable; 0.667≤α<0.800 tentatively acceptable; "
                     f"α<0.667 unreliable (Krippendorff, 2004)."),
@@ -4896,15 +4667,16 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                     "q = user-declared number of categories in the coding "
                     "scheme (not merely the count observed in this sample -- "
                     "see Gwet, Handbook of Inter-Rater Reliability, 4th ed., Ch. 4). "
-                    "This P_e formulation avoids the prevalence paradox that "
-                    "affects Cohen's κ. Variance via jackknife (Gwet, 2014, App. A). "
+                    "Gwet (2008) proposed this P_e to reduce the dependence of the "
+                    "coefficient on category prevalence. Variance: delete-one-unit "
+                    "jackknife (Efron & Tibshirani, 1993). "
                     "Reference: Gwet (2008). British Journal of Mathematical and "
                     "Statistical Psychology, 61(1), 29–48.")
                 ac1_res["dual_ci_note"] = _dual_ci_note(
                     "Gwet's AC1", "jackknife",
                     ac1_res.get("ci_lo_z"), ac1_res.get("ci_hi_z"),
                     ac1_res.get("ci_lo_t"), ac1_res.get("ci_hi_t"),
-                    ac1_res.get("ci_df"))
+                    ac1_res.get("ci_df"), alpha=alpha)
             res["gwet_ac1"] = ac1_res
 
         # ── Scott's π (dichotomous/nominal, k=2 only) ────────────────────
@@ -4914,10 +4686,10 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                 sp_res["pi"], sp_res["label"], sp_res["n"], data_type)
             if sp_res.get("pi") is not None and not np.isnan(sp_res.get("pi", np.nan)):
                 sp_res["dual_ci_note"] = _dual_ci_note(
-                    "Scott's \u03c0", "analytic",
+                    "Scott's \u03c0", "gwet2021",
                     sp_res.get("ci_lo_z"), sp_res.get("ci_hi_z"),
                     sp_res.get("ci_lo_t"), sp_res.get("ci_hi_t"),
-                    sp_res.get("ci_df"))
+                    sp_res.get("ci_df"), alpha=alpha)
             res["scott_pi"] = sp_res
 
         # ── Brennan-Prediger (dichotomous/nominal, k=2 only) ─────────────
@@ -4962,7 +4734,7 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                     "Brennan-Prediger", "analytic",
                     bp_res.get("ci_lo_z"), bp_res.get("ci_hi_z"),
                     bp_res.get("ci_lo_t"), bp_res.get("ci_hi_t"),
-                    bp_res.get("ci_df"))
+                    bp_res.get("ci_df"), alpha=alpha)
             res["brennan_prediger"] = bp_res
 
         # ── Gwet's AC2 (ordinal, k=2 or k≥3) ────────────────────────────
@@ -5004,34 +4776,28 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                 "radical": {
                     "label": "Radical",
                     "formula": "w_cc' = 1 − √(|c−c'|/(q−1))",
-                    "reference": "Formula independently verified against R's own "
-                                 "irrCAC::radical.weights() reference package output "
-                                 "(Gwet, K.L., irrCAC R package).",
-                    "when_to_use": "Intermediate between linear and quadratic in how "
-                                   "quickly credit decays with distance -- decays fastest "
-                                   "for the FIRST unit of disagreement, then more slowly. "
-                                   "Appropriate when even small disagreements should already "
-                                   "reduce credit substantially, but very distant "
-                                   "disagreements should not be penalised much further beyond "
-                                   "that initial drop.",
+                    "reference": "Gwet, K.L. (2014). Handbook of Inter-Rater Reliability "
+                                 "(4th ed.). Advanced Analytics, LLC.",
+                    "when_to_use": "The most severe of the three distance-based schemes: "
+                                   "credit falls fastest at the FIRST unit of disagreement "
+                                   "and more slowly afterwards, so any partial disagreement "
+                                   "receives less credit than under linear weights (which in "
+                                   "turn give less than quadratic weights). Appropriate when "
+                                   "even a one-category disagreement should already cost "
+                                   "most of the credit.",
                 },
                 "ordinal": {
-                    "label": "Ordinal (Krippendorff-style)",
-                    "formula": "w_cc' = 1 − d(c,c')/d_max, where d(a,b) = "
-                               "[Σ n_g for g from a to b − (n_a+n_b)/2]² is "
-                               "Krippendorff's (2004) ordinal-metric squared distance "
-                               "computed from the empirical category frequencies n_g "
-                               "over the declared category range, and d_max = d(lo, hi) "
-                               "is this same distance evaluated at the two ends of that "
-                               "range (so w = 1 at zero distance, w = 0 at the maximum)",
-                    "reference": "Krippendorff, K. (2004). Content Analysis: An Introduction "
-                                 "to Its Methodology (2nd ed.). Sage Publications, Chapter 11.",
-                    "when_to_use": "Unlike the other schemes, weights here depend on the "
-                                   "empirical FREQUENCY distribution of ratings, not solely "
-                                   "on category values. Appropriate when the categories are "
-                                   "not evenly spaced in a substantive sense, and the "
-                                   "empirical distribution of responses should inform how "
-                                   "\u2018close\u2019 two categories are treated as being.",
+                    "label": "Ordinal (Gwet)",
+                    "formula": "w_cc' = 1 − M_cc'/max(M), with M_cc' = n(n−1)/2 and "
+                               "n = |c−c'| + 1 (category positions on the declared scale)",
+                    "reference": "Gwet, K.L. (2014). Handbook of Inter-Rater Reliability "
+                                 "(4th ed.). Advanced Analytics, LLC.",
+                    "when_to_use": "Uses only the rank order of the categories, not their "
+                                   "numeric spacing: the penalty grows with the number of "
+                                   "category pairs spanned between the two ratings. "
+                                   "Appropriate when categories are ordered but the "
+                                   "distances between adjacent categories should not be "
+                                   "treated as equal-interval.",
                 },
                 "identity": {
                     "label": "Identity (unweighted)",
@@ -5068,7 +4834,7 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                         f"Gwet's AC2 ({_scheme_meta['label']})", "jackknife",
                         _r.get("ci_lo_z"), _r.get("ci_hi_z"),
                         _r.get("ci_lo_t"), _r.get("ci_hi_t"),
-                        _r.get("ci_df"))
+                        _r.get("ci_df"), alpha=alpha)
                 _ac2_schemes_computed[_scheme_key] = _r
             res["gwet_ac2"] = {"schemes": _ac2_schemes_computed,
                                 "n": n_units, "k": k_raters,
@@ -5086,7 +4852,7 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                 "ρ = Pearson correlation (precision); "
                 "C_b = 2/(v + 1/v + u²) = bias correction factor (accuracy); "
                 "v = σ_x/σ_y (scale shift); u = (μ_x−μ_y)/(σ_x·σ_y)^0.5 (location shift). "
-                "95% CI via Fisher z-transformation on ρ_c. "
+                f"{round((1 - alpha) * 100):g}% CI via Fisher z-transformation on ρ_c. "
                 "Reference: Lin (1989). Biometrics, 45(1), 255–268.")
             res["lin_ccc"] = ccc_res
 
@@ -5135,9 +4901,9 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
         row["Kripp. α"]   = _sv(ka.get("alpha")) if ka else "—"
         _lo = ka.get("ci_lo",float("nan")); _hi = ka.get("ci_hi",float("nan"))
         try:
-            row["Kripp. 95% CI"] = (f"[{_lo:.3f}, {_hi:.3f}]"
+            row["Kripp. CI"] = (f"[{_lo:.3f}, {_hi:.3f}]"
                                     if not (np.isnan(_lo) or np.isnan(_hi)) else "—")
-        except: row["Kripp. 95% CI"] = "—"
+        except: row["Kripp. CI"] = "—"
         row["Kripp. Label"] = ka.get("label","—") if ka else "—"
         summary_rows.append(row)
 
