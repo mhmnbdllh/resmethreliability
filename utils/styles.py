@@ -66,6 +66,13 @@ HEADER = """
     margin: 0 0 .4rem 0;
     letter-spacing: -.4px;
 }
+.main-hdr h2 {
+    color: #fff;
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin: 0 0 .4rem 0;
+    letter-spacing: -.4px;
+}
 .main-hdr p {
     color: #aeb8d4;
     margin: 0;
