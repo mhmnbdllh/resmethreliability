@@ -14,7 +14,7 @@ from utils.styles import load_css
 
 def home():
     st.set_page_config(
-        page_title="Reliability Toolkit",
+        page_title="Reliability Toolkit: ResMeth Statistics",
         page_icon="🧪",
         layout="wide",
         initial_sidebar_state="collapsed",
@@ -24,9 +24,9 @@ def home():
     st.markdown(
         """
         <div class="main-hdr">
-          <h1>&#129514; Reliability Toolkit</h1>
+          <h1>&#129514; Reliability Toolkit: ResMeth Statistics</h1>
           <h2>Developed by Muhaimin Abdullah, Ahmad Munir, Wiwiet Eva Savitri</h2>
-          <p>Supported by BOMA Kemristekdikti & LPPM Universitas Negeri Surabaya</p>
+          <p>Supported by BIMA Kemristekdikti & LPPM Universitas Negeri Surabaya</p>
         </div>
         """,
         unsafe_allow_html=True,
