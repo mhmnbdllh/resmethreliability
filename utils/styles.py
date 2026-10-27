@@ -74,10 +74,9 @@ HEADER = """
     letter-spacing: -.4px;
 }
 .main-hdr p {
-    color: #aeb8d4;
+    color: #fff;
     margin: 0;
-    font-size: .95rem;
-    max-width: 48ch;
+    font-size: 1rem;
 }
 .badge {
     display: inline-block;
