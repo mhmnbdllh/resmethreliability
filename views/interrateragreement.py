@@ -543,11 +543,10 @@ st.markdown(load_page_css(), unsafe_allow_html=True)
 
 st.markdown("""
 <div class="main-hdr">
-  <h1>&#129514; Inter-Rater Agreement
-    <span class="badge">ResMeth-IRA</span>
-    <span class="badge">Publication-Grade</span>
-    <span class="badge">Multi-Group</span>
-    <span class="badge">Extended Diagnostics</span>
+  <h1>&#129514; Inter-Rater Agreement (ResMeth-IrA)
+    <span class="badge">Muhaimin Abdullah</span>
+    <span class="badge">Ahmad Munir</span>
+    <span class="badge">Wiwiet Eva Savitri</span>
   </h1>
   <p>Cohen&#39;s &kappa; &middot; Fleiss&#39; &kappa; &middot; Gwet&#39;s AC1/AC2 &middot;
      Scott&#39;s &pi; &middot; Brennan-Prediger &middot; ICC &middot; Lin&#39;s CCC &middot;
@@ -558,7 +557,7 @@ st.markdown("""
 st.markdown("""
 <div style="margin-bottom:1rem;">
   <p style="color:#64748b;font-size:.9rem;margin-bottom:.4rem;">
-    &#9749; Support this work &mdash; scan QRIS:</p>
+    &#9749; Support this work &mdash;:</p>
   <img src="https://muhaiminabdullah.com/media/images/qris_muhaiminabdullahdotcom.png"
        style="width:180px;border-radius:10px;border:2px solid #e94560;display:block;"/>
 </div>""", unsafe_allow_html=True)
