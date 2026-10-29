@@ -552,6 +552,7 @@ st.markdown("""
      Scott&#39;s &pi; &middot; Brennan-Prediger &middot; ICC &middot; Lin&#39;s CCC &middot;
      Krippendorff&#39;s &alpha; &nbsp;&middot;&nbsp;
      Analyse multiple rating groups from a single file in one run</p>
+  <p>Developed by Muhaimin Abdullah, Ahmad Munir, Wiwiet Eva Savitri</p>
 </div>""", unsafe_allow_html=True)
 
 st.markdown("""
