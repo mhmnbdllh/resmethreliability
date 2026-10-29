@@ -233,7 +233,8 @@ def _methodological_notes(M, alpha):
             "C_b = bias correction factor (accuracy). "
             "CCC simultaneously evaluates how tightly raters agree (precision) "
             "and how close their scores are to the line of perfect concordance (accuracy). "
-            "CCC ≤ Pearson r always; the gap between them reflects systematic bias. "
+            "|ρ_c| ≤ |r| always, because ρ_c = r × C_b with 0 < C_b ≤ 1; the gap "
+            "between them reflects systematic bias. "
             f"{pct}% CI via Fisher z-transformation. "
             "Benchmarks (Koo & Li, 2016 adapted): ρ_c > .90 Excellent; "
             ".75–.90 Good; .50–.75 Moderate; < .50 Poor. "
@@ -734,22 +735,24 @@ with st.sidebar:
                     f'<b>{methods_str}</b>'
                     f'</div>', unsafe_allow_html=True)
 
-                # ── Mandatory instrument-scale declaration ────────────
-                # Required (not optional, not defaulted, not inferred)
-                # whenever a q-dependent coefficient is applicable for
-                # this group: Gwet's AC1, Gwet's AC2, or Brennan-
-                # Prediger. Per the primary-theory audit (Gwet,
-                # Handbook of Inter-Rater Reliability, 4th ed., Ch. 4; Brennan
-                # & Prediger, 1981), q must reflect the instrument's
-                # declared category count -- a fact the application
-                # cannot infer or guess from the data alone, since a
-                # valid category may simply be absent from a given
-                # sample. Fields start EMPTY (no plausible-looking
-                # default) and the Run button is disabled until every
-                # such group has a value.
+                # ── Instrument-scale declaration ──────────────────────
+                # The q-dependent coefficients (Gwet's AC1/AC2, Brennan-
+                # Prediger) need the number of categories the instrument
+                # defines. The data alone cannot reveal it when a valid
+                # category is absent from the sample, so it is declared,
+                # not inferred (Gwet, Handbook of Inter-Rater Reliability,
+                # 4th ed., Ch. 4; Brennan & Prediger, 1981). The one
+                # exception is dichotomous data, which have exactly two
+                # categories by definition: q is fixed at 2 and nothing
+                # is asked. For the other declarations the fields start
+                # EMPTY (no plausible-looking default) and the Run button
+                # stays disabled until every such group has a value.
                 needs_q = any(m in methods for m in ("gwet_ac1", "bp"))
                 needs_ac2 = "gwet_ac2" in methods
-                if needs_q or needs_ac2:
+                if irar_dtype_i == "dichotomous":
+                    # Two categories by definition; q is not asked.
+                    q_declared_i = 2
+                elif needs_ac2 and irar_dtype_i == "ordinal":
                     st.markdown(
                         '<p style="font-size:.78rem;color:#9a3412;'
                         'font-weight:600;margin:6px 0 2px;">'
@@ -757,15 +760,19 @@ with st.sidebar:
                         '(not just the values observed in this data) — see '
                         'Gwet (2014) / Brennan &amp; Prediger (1981).</p>',
                         unsafe_allow_html=True)
-                if needs_ac2 and irar_dtype_i == "ordinal":
                     sc1, sc2 = st.columns(2)
+                    # Integer-typed inputs (step=1): the widget returns a
+                    # whole number, so the declared bounds, q and the scale
+                    # minimum passed to the engine are integers by
+                    # construction (rating-scale categories carry integer
+                    # codes).
                     smin_in = sc1.number_input(
-                        "Scale minimum", value=None, step=1.0,
+                        "Scale minimum", value=None, step=1,
                         key=f"irar_scalemin_{i}", placeholder="e.g., 1",
                         help="The lowest possible value on the rating instrument, "
                              "whether or not it was actually used by raters.")
                     smax_in = sc2.number_input(
-                        "Scale maximum", value=None, step=1.0,
+                        "Scale maximum", value=None, step=1,
                         key=f"irar_scalemax_{i}", placeholder="e.g., 5",
                         help="The highest possible value on the rating instrument, "
                              "whether or not it was actually used by raters.")
@@ -781,8 +788,15 @@ with st.sidebar:
                         st.error("Enter both scale minimum and maximum "
                                  "(maximum must exceed minimum) to proceed.")
                 elif needs_q and not needs_ac2:
-                    # Dichotomous/nominal: no inherent order, so a bare
-                    # category count is requested rather than min/max.
+                    # Nominal: no inherent order, so a bare category count
+                    # is requested rather than a minimum and maximum.
+                    st.markdown(
+                        '<p style="font-size:.78rem;color:#9a3412;'
+                        'font-weight:600;margin:6px 0 2px;">'
+                        '&#9888; Required: declare the full instrument scale '
+                        '(not just the values observed in this data) — see '
+                        'Gwet (2014) / Brennan &amp; Prediger (1981).</p>',
+                        unsafe_allow_html=True)
                     q_in = st.number_input(
                         "Total number of categories in the coding scheme",
                         value=None, step=1, min_value=2,
@@ -1522,7 +1536,10 @@ for ti, res in enumerate(M["constructs"]):
                                   ["Krippendorff's α",_f(_kav)],
                                   [f"{_cl} CI ({_nb:,} bootstrap resamples)",_kci],
                                   ["Data type / metric",ka.get("data_type","—").title()],
-                                  ["N (units)",str(n_units)],
+                                  # α uses every unit with at least two ratings
+                                  # (pairable values), which can exceed the
+                                  # complete-case count used by the other tabs.
+                                  ["N (units with ≥ 2 ratings)",str(ka.get("n_units", n_units))],
                                   ["k (raters)",str(k_raters)],
                                   ["Threshold — min acceptable","α ≥ 0.667 (Krippendorff, 2004)"],
                                   ["Threshold — reliable","α ≥ 0.800 (Krippendorff, 2004)"],
@@ -1787,8 +1804,9 @@ for ti, res in enumerate(M["constructs"]):
                                    "Ratio of the two SDs"],
                                   [f"{_cl} CI (Fisher z-transform)",_cci,""],
                                   ["N (units)",str(n_units),""],
-                                  ["CCC ≤ Pearson r",
-                                   "Always true" if not (np.isnan(_cv) or np.isnan(_crho)) and _cv<=_crho else "—",
+                                  ["|ρ_c| ≤ |Pearson r|",
+                                   ("Satisfied" if abs(_cv) <= abs(_crho) + 1e-12 else "Not satisfied")
+                                   if not (np.isnan(_cv) or np.isnan(_crho)) else "—",
                                    "Gap = extent of systematic bias"]]
                             st.markdown(html_tbl(rows,left_cols={0}),unsafe_allow_html=True)
                             # Visual: precision vs accuracy decomposition
