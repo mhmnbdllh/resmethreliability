@@ -668,18 +668,19 @@ def _resolve_q(cats, q_declared, scale_min=None, require_span=False):
         return 0, 0, False, 0
     lo = int(scale_min) if scale_min is not None else int(cats[0])
     span = int(cats[-1]) - lo + 1
-    # VERIFIED (2026-10-21): int(q_declared) below silently truncates a
-    # non-integer q_declared (e.g. 5.7 -> 5) with no warning -- flagged as
-    # a possible bug and checked against the only UI path that supplies
-    # q_declared (views/interrateragreement.py's q_in st.number_input,
-    # around line 754, feeding q_declared_i = int(q_in) at line 762). That
-    # widget is created with step=1 (an int, not a float) and no custom
-    # `format=` override, which makes Streamlit constrain the widget to
-    # integer-only entry and return a Python int for q_in -- a user
-    # literally cannot type "5.7" into it. So int(q_declared) is currently
-    # unreachable with a genuinely fractional value through the app's own
-    # UI; it is retained here only as defensive input hygiene for any
-    # future or programmatic (non-UI) caller that might pass a float.
+    # VERIFIED: int(q_declared) below silently truncates a non-integer
+    # q_declared (e.g. 5.7 -> 5) with no warning -- flagged as a possible
+    # bug and checked against every UI path in views/interrateragreement.py
+    # that supplies q_declared. The nominal branch feeds it from a
+    # st.number_input created with step=1 (an int, not a float) and no
+    # custom `format=` override, which makes Streamlit constrain the widget
+    # to integer-only entry and return a Python int; the dichotomous branch
+    # sets it to the literal 2; the ordinal branch derives it from integer
+    # scale minimum and maximum. A user therefore cannot enter a fractional
+    # value through the UI, so int(q_declared) is unreachable with a
+    # genuinely fractional value there; it is retained only as defensive
+    # input hygiene for any future or programmatic (non-UI) caller that
+    # might pass a float.
     q_candidate = int(q_declared) if (q_declared is not None and q_declared >= q_observed) else q_observed
     q = max(q_candidate, span) if require_span else q_candidate
     observed_span = int(cats[-1]) - int(cats[0]) + 1   # ignores scale_min padding
@@ -1174,7 +1175,6 @@ def _lin_ccc(r1, r2, alpha=0.05):
     # ICC benchmark labels for CCC (Koo & Li 2016 adapted)
     def _ccc_label(v):
         if np.isnan(v): return "N/A"
-        v = abs(v)
         if v < 0.50: return "Poor (<0.50)"
         if v < 0.75: return "Moderate (0.50–0.75)"
         if v < 0.90: return "Good (0.75–0.90)"
@@ -1407,7 +1407,8 @@ def _ccc_interp(ccc, rho, Cb, label, n):
         f"accuracy (bias correction factor C_b = {Cb_str}). "
         f"A high Pearson r with low C_b indicates raters agree on rank order "
         f"but differ systematically in absolute scoring (scale or location bias). "
-        f"CCC ≤ Pearson r always holds; the gap between them reflects systematic bias. "
+        f"|CCC| ≤ |Pearson r| always holds, because CCC = r × C_b with 0 < C_b ≤ 1; "
+        f"the gap between them reflects systematic bias. "
         f"Benchmarks (Koo & Li, 2016 adapted): CCC > 0.90 excellent; "
         f"0.75–0.90 good; 0.50–0.75 moderate; < 0.50 poor. "
         f"Reference: Lin (1989, 1992) Biometrics; Lin, Hedayat, Sinha & Yang (2002) JASA; "
@@ -1871,9 +1872,9 @@ def _cohen_kappa(X, rater_names, alpha=0.05, data_type=None,
         # proportions p1=mean(r1), p2=mean(r2) -- this uses the WRONG
         # table cells (b,c only, via p1-p2=(b-c)/n, not a,d for PI) and
         # an extraneous /2 divisor not in Byrt et al.'s formula. Verified
-        # on the worked example a=55,b=7,c=12,d=12 (n=86) from Byrt et
-        # al. (1993) itself: correct PI=0.5000, BI=-0.0581; the previous
-        # code returned PI=0.0291, BI=-0.0291 for that same table.
+        # on the 2 x 2 table of the bundled dichotomous sample (raters R1
+        # and R2: a=55, b=7, c=12, d=12, n=86): correct PI=0.5000,
+        # BI=-0.0581; the previous code returned PI=0.0291, BI=-0.0291.
         # The higher of the two category codes is treated as the
         # "positive" category (code 1 for the usual 0/1 coding).
         _neg, _pos = cats_sorted
@@ -4325,6 +4326,10 @@ def _irar_strength_interp(method_key, value, label, n_units, k_raters, data_type
                f"0.50–0.75 Moderate, <0.50 Poor).")
         bench_ref = "Koo & Li (2016)"
         strength  = icc_str.lower()
+        # The Landis & Koch implication sentence set above does not apply
+        # to the ICC, whose verbal band comes from Koo & Li (2016) alone;
+        # it is dropped so that the text states one band only.
+        implication = ""
     else:
         sym = "κ"; thr = ("Landis & Koch (1977) benchmarks: <0 Poor; "
                           "0.00–0.20 Slight; 0.21–0.40 Fair; 0.41–0.60 Moderate; "
@@ -4342,7 +4347,8 @@ def _irar_strength_interp(method_key, value, label, n_units, k_raters, data_type
         f"<b>{strength} inter-rater agreement</b> "
         f"among {k_raters} raters rating {n_units} units "
         f"({dtype_str} data; {label}). "
-        f"{implication} {thr}"
+        + (f"{implication} " if implication else "")
+        + thr
     )
 
 
@@ -4482,6 +4488,34 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
             })
             continue
 
+        # Categorical declarations are binding: the ratings must be integer
+        # codes that fit the declared number of categories or scale.
+        if data_type in ("dichotomous", "nominal", "ordinal"):
+            _codes = np.unique(X_with_missing[~np.isnan(X_with_missing)])
+            _q_decl, _s_min = grp.get("q_declared"), grp.get("scale_min")
+            _err = None
+            if np.any(_codes != np.round(_codes)):
+                _err = ("Categorical data types require integer category codes; "
+                        "non-integer values were found in the selected columns.")
+            elif data_type == "dichotomous" and len(_codes) > 2:
+                _err = (f"Dichotomous data have two categories, but {len(_codes)} "
+                        f"distinct codes were found in the selected columns.")
+            elif data_type == "nominal" and _q_decl is not None and len(_codes) > int(_q_decl):
+                _err = (f"{len(_codes)} distinct codes were found, more than the "
+                        f"{int(_q_decl)} categories declared for this group.")
+            elif (data_type == "ordinal" and _q_decl is not None and _s_min is not None
+                  and (_codes.min() < _s_min or _codes.max() > _s_min + _q_decl - 1)):
+                _err = (f"Ratings outside the declared scale {int(_s_min)}–"
+                        f"{int(_s_min + _q_decl - 1)} were found in the selected columns.")
+            if _err:
+                constructs.append({
+                    "construct_name": name, "data_type": data_type,
+                    "n_units": n_units,     "k_raters": k_raters,
+                    "rater_names": cols,    "applicable_methods": [],
+                    "error": _err,
+                })
+                continue
+
         applicable = _get_applicable_methods(data_type, k_raters)
 
         # ── Mandatory, user-declared instrument-scale information ────────
@@ -4603,7 +4637,7 @@ def run_multi_irar(df, groups, alpha=0.05, n_boot=1000):
                     if icc_res is not None:
                         i21 = icc_res.get("icc_2_1", np.nan)
                         icc_res["interpretation_text"] = _irar_strength_interp(
-                            "ICC(2,1)", i21, icc_res.get("icc_2_1_label","—"),
+                            "ICC(A,1)", i21, icc_res.get("icc_2_1_label","—"),
                             n_units, k_raters, data_type)
                         res["icc"] = icc_res
                     else:
